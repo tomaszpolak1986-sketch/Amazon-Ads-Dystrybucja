@@ -1,6 +1,6 @@
 # Wspolne dla skryptow wydania. Dolaczane przez `. narzedzia/_wspolne.sh`.
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REJESTR="ghcr.io/tomaszpolak1986-sketch"
 KLUCZE="/d/Claude Projekty/AdsPanel-KLUCZ-PRYWATNY"
 PY="$ROOT/.venv/Scripts/python.exe"

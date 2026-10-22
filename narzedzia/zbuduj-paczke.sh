@@ -30,9 +30,12 @@ echo "== Skladanie paczki w $CEL"
 rm -rf "$CEL"; mkdir -p "$CEL/pliki"
 docker save "adspanel-api:$WERSJA" "adspanel-web:$WERSJA" postgres:17-alpine \
     | gzip -6 > "$CEL/pliki/obrazy-$WERSJA.tar.gz"
-cp dystrybucja/docker-compose.yml dystrybucja/instaluj.sh dystrybucja/aktualizuj.sh \
-   dystrybucja/aktualizuj-auto.sh dystrybucja/kopia.sh dystrybucja/INSTRUKCJA.md "$CEL/pliki/"
-sed "s|^LICENCJA=.*|LICENCJA=$LICENCJA|" dystrybucja/adspanel.env.wzor > "$CEL/pliki/adspanel.env.wzor"
+# Linux nie uruchomi skryptu z windowsowymi koncami linii (CRLF) - a git na
+# Windows potrafi je dopisac. Kopiujemy wiec zawsze z konwersja do LF.
+for f in docker-compose.yml instaluj.sh aktualizuj.sh aktualizuj-auto.sh kopia.sh INSTRUKCJA.md; do
+    sed 's/\r$//' "dystrybucja/$f" > "$CEL/pliki/$f"
+done
+sed "s/\r$//; s|^LICENCJA=.*|LICENCJA=$LICENCJA|" dystrybucja/adspanel.env.wzor > "$CEL/pliki/adspanel.env.wzor"
 echo "$WERSJA" > "$CEL/pliki/WERSJA"
 echo "$SLUG" > "$CEL/pliki/KLIENT"
 echo "$REJESTR" > "$CEL/pliki/REJESTR"

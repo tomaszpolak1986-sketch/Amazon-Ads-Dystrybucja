@@ -35,4 +35,7 @@ def zapisz(zmiany: dict[str, str]) -> None:
         sciezka.write_text("\n".join(linie) + "\n", encoding="utf-8")
 
         for klucz, wartosc in zmiany.items():
-            setattr(settings, klucz.lower(), wartosc)
+            # Klucz spoza Settings (np. dopisany recznie przez administratora)
+            # trafia tylko do pliku - pydantic odrzucilby nieznane pole
+            if klucz.lower() in type(settings).model_fields:
+                setattr(settings, klucz.lower(), wartosc)

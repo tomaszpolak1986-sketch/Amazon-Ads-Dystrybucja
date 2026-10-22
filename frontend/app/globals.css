@@ -1,0 +1,144 @@
+@import "tailwindcss";
+
+/* ------------------------------------------------------------------ *
+   Paleta. Jasny motyw domyslnie, ciemny przez prefers-color-scheme
+   i przez [data-theme] zeby przelacznik wygrywal w obie strony.
+ * ------------------------------------------------------------------ */
+
+:root {
+  --bg: #f6f7f9;
+  --surface: #ffffff;
+  --surface-2: #f1f3f6;
+  --border: #e2e5ea;
+  --text: #14181f;
+  --text-muted: #626b7a;
+  --accent: #2f6df6;
+  --accent-soft: #e8effe;
+  --good: #0e8a5f;
+  --good-soft: #e3f5ed;
+  --warn: #b26a00;
+  --warn-soft: #fdf0dc;
+  --bad: #cc2f42;
+  --bad-soft: #fdeaec;
+  --grid: #e8ebef;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0d1015;
+    --surface: #161a21;
+    --surface-2: #1d222b;
+    --border: #272d38;
+    --text: #e8ecf2;
+    --text-muted: #8b95a5;
+    --accent: #5b8dff;
+    --accent-soft: #1a2540;
+    --good: #35c48d;
+    --good-soft: #122b22;
+    --warn: #e0a341;
+    --warn-soft: #2e2415;
+    --bad: #f2637a;
+    --bad-soft: #331a20;
+    --grid: #242a34;
+  }
+}
+
+:root[data-theme="dark"] {
+  --bg: #0d1015;
+  --surface: #161a21;
+  --surface-2: #1d222b;
+  --border: #272d38;
+  --text: #e8ecf2;
+  --text-muted: #8b95a5;
+  --accent: #5b8dff;
+  --accent-soft: #1a2540;
+  --good: #35c48d;
+  --good-soft: #122b22;
+  --warn: #e0a341;
+  --warn-soft: #2e2415;
+  --bad: #f2637a;
+  --bad-soft: #331a20;
+  --grid: #242a34;
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-border: var(--border);
+  --color-text: var(--text);
+  --color-muted: var(--text-muted);
+  --color-accent: var(--accent);
+  --color-accent-soft: var(--accent-soft);
+  --color-good: var(--good);
+  --color-good-soft: var(--good-soft);
+  --color-warn: var(--warn);
+  --color-warn-soft: var(--warn-soft);
+  --color-bad: var(--bad);
+  --color-bad-soft: var(--bad-soft);
+  --color-grid: var(--grid);
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, "SF Mono", Menlo, monospace;
+}
+
+html,
+body {
+  background: var(--bg);
+  color: var(--text);
+}
+
+body {
+  font-family: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Liczby w tabelach maja byc wyrownane kolumnowo */
+.tnum {
+  font-variant-numeric: tabular-nums;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 6px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
+}
+
+/* --- ikony motywu ---
+   Przelacznik nie trzyma motywu w stanie Reacta: aktualny motyw wynika
+   z atrybutu data-theme, wiec o widocznosci ikon decyduje CSS. Zero ryzyka
+   niezgodnosci hydracji i zero migniecia przy ladowaniu strony. */
+.icon-dark {
+  display: none;
+}
+.icon-light {
+  display: block;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .icon-dark {
+    display: block;
+  }
+  :root:not([data-theme="light"]) .icon-light {
+    display: none;
+  }
+}
+:root[data-theme="dark"] .icon-dark {
+  display: block;
+}
+:root[data-theme="dark"] .icon-light {
+  display: none;
+}
+:root[data-theme="light"] .icon-dark {
+  display: none;
+}
+:root[data-theme="light"] .icon-light {
+  display: block;
+}

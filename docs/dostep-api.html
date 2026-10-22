@@ -1,0 +1,546 @@
+<title>Dostęp API dla AdsPanel</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+
+<style>
+  /* ---------- tokeny: jasny motyw jako baza ---------- */
+  :root {
+    --paper:    #f4f6f8;
+    --surface:  #ffffff;
+    --sunk:     #eceff3;
+    --rule:     #dce1e7;
+    --rule-soft:#e8ecf1;
+    --ink:      #18212c;
+    --ink-soft: #5b6675;
+    --ink-faint:#8a93a1;
+    --accent:   #2d5d8a;
+    --accent-bg:#e6eef6;
+    --signal:   #a35d15;
+    --signal-bg:#faeee0;
+    --good:     #2b6b50;
+    --good-bg:  #e3f0ea;
+
+    --step: clamp(1.5rem, 4vw, 2.5rem);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --paper:    #10151b;
+      --surface:  #19202a;
+      --sunk:     #141a22;
+      --rule:     #2a323e;
+      --rule-soft:#222932;
+      --ink:      #e4e9f0;
+      --ink-soft: #9aa5b4;
+      --ink-faint:#6d7887;
+      --accent:   #78aade;
+      --accent-bg:#1b2938;
+      --signal:   #d99a4e;
+      --signal-bg:#2c2418;
+      --good:     #5cb890;
+      --good-bg:  #16261f;
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --paper:    #10151b;
+    --surface:  #19202a;
+    --sunk:     #141a22;
+    --rule:     #2a323e;
+    --rule-soft:#222932;
+    --ink:      #e4e9f0;
+    --ink-soft: #9aa5b4;
+    --ink-faint:#6d7887;
+    --accent:   #78aade;
+    --accent-bg:#1b2938;
+    --signal:   #d99a4e;
+    --signal-bg:#2c2418;
+    --good:     #5cb890;
+    --good-bg:  #16261f;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+    font-size: 16px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap {
+    max-width: 44rem;
+    margin: 0 auto;
+    padding: clamp(1.5rem, 5vw, 3.5rem) clamp(1rem, 4vw, 2rem) 5rem;
+    display: flex;
+    flex-direction: column;
+    gap: var(--step);
+  }
+
+  /* ---------- typografia ---------- */
+  h1, h2, h3 {
+    font-family: Archivo, "IBM Plex Sans", ui-sans-serif, sans-serif;
+    text-wrap: balance;
+    margin: 0;
+    letter-spacing: -0.015em;
+  }
+  h1 { font-size: clamp(1.75rem, 5vw, 2.35rem); font-weight: 700; line-height: 1.15; }
+  h2 { font-size: 1.2rem; font-weight: 600; line-height: 1.3; }
+  h3 { font-size: 0.95rem; font-weight: 600; }
+  p  { margin: 0; }
+
+  .eyebrow {
+    font-family: Archivo, sans-serif;
+    font-size: 0.7rem;
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+  }
+
+  .lede { color: var(--ink-soft); font-size: 1.02rem; }
+  .small { font-size: 0.86rem; color: var(--ink-soft); }
+  a { color: var(--accent); text-underline-offset: 2px; }
+  a:focus-visible, button:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+    border-radius: 3px;
+  }
+
+  /* ---------- naglowek ---------- */
+  header { display: flex; flex-direction: column; gap: 0.85rem; }
+
+  .meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem 1.25rem;
+    padding-top: 0.9rem;
+    border-top: 1px solid var(--rule);
+    font-size: 0.82rem;
+    color: var(--ink-soft);
+  }
+  .meta b { color: var(--ink); font-weight: 500; }
+
+  .account {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    padding-top: 0.35rem;
+  }
+  .account .copy code { font-size: 0.78rem; }
+
+  /* ---------- streszczenie ---------- */
+  .summary {
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-radius: 4px;
+    padding: 1.15rem 1.35rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.7rem;
+  }
+  .summary ol {
+    margin: 0;
+    padding-left: 1.15rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    font-size: 0.94rem;
+  }
+  .summary li::marker { color: var(--ink-faint); font-variant-numeric: tabular-nums; }
+
+  /* ---------- kroki ---------- */
+  .steps { display: flex; flex-direction: column; gap: var(--step); }
+
+  .step { display: grid; grid-template-columns: 2.5rem 1fr; gap: 0 1rem; }
+
+  .num {
+    font-family: Archivo, sans-serif;
+    font-size: 1.4rem;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    color: var(--accent);
+    line-height: 1.25;
+    text-align: right;
+  }
+
+  .step-body { display: flex; flex-direction: column; gap: 0.8rem; min-width: 0; }
+
+  .step-head { display: flex; flex-direction: column; gap: 0.25rem; }
+  .duration {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 0.74rem;
+    color: var(--ink-faint);
+  }
+
+  ul.plain {
+    margin: 0;
+    padding-left: 1.1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    font-size: 0.94rem;
+  }
+  ul.plain li::marker { color: var(--ink-faint); }
+
+  /* ---------- sciezka klikania ---------- */
+  .path {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 0.8rem;
+    line-height: 1.9;
+    background: var(--sunk);
+    border: 1px solid var(--rule-soft);
+    border-radius: 3px;
+    padding: 0.6rem 0.85rem;
+    overflow-x: auto;
+    white-space: nowrap;
+    color: var(--ink-soft);
+  }
+  .path b { color: var(--ink); font-weight: 500; }
+  .path .sep { color: var(--ink-faint); padding: 0 0.25rem; }
+
+  /* ---------- ciag do skopiowania ---------- */
+  .copy {
+    display: flex;
+    align-items: stretch;
+    border: 1px solid var(--rule);
+    border-radius: 3px;
+    overflow: hidden;
+    background: var(--surface);
+  }
+  .copy code {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 0.86rem;
+    padding: 0.6rem 0.8rem;
+    flex: 1;
+    overflow-x: auto;
+    white-space: nowrap;
+    color: var(--ink);
+  }
+  .copy button {
+    font-family: Archivo, sans-serif;
+    font-size: 0.74rem;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    border: 0;
+    border-left: 1px solid var(--rule);
+    background: var(--sunk);
+    color: var(--ink-soft);
+    padding: 0 0.9rem;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 120ms, color 120ms;
+  }
+  .copy button:hover { background: var(--accent-bg); color: var(--accent); }
+  .copy button[data-done="1"] { color: var(--good); background: var(--good-bg); }
+
+  /* ---------- adnotacje ---------- */
+  .note {
+    border-left: 2px solid var(--signal);
+    background: var(--signal-bg);
+    padding: 0.7rem 0.95rem;
+    font-size: 0.88rem;
+    border-radius: 0 3px 3px 0;
+  }
+  .note b { font-weight: 600; }
+
+  .aside {
+    border-left: 2px solid var(--rule);
+    padding: 0.15rem 0 0.15rem 0.95rem;
+    font-size: 0.88rem;
+    color: var(--ink-soft);
+  }
+
+  /* ---------- sekcje koncowe ---------- */
+  .panel {
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-radius: 4px;
+    padding: 1.25rem 1.4rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+
+  .strike { display: flex; flex-direction: column; gap: 0.55rem; }
+  .strike div {
+    font-size: 0.92rem;
+    padding-left: 1.35rem;
+    position: relative;
+    color: var(--ink-soft);
+  }
+  .strike div::before {
+    content: "×";
+    position: absolute;
+    left: 0;
+    top: -0.05rem;
+    color: var(--ink-faint);
+    font-size: 1.05rem;
+    line-height: 1.5;
+  }
+  .strike b { color: var(--ink); font-weight: 500; }
+
+  .checklist { display: flex; flex-direction: column; gap: 0.55rem; }
+  .checklist label {
+    display: flex;
+    gap: 0.65rem;
+    align-items: flex-start;
+    font-size: 0.94rem;
+    cursor: pointer;
+  }
+  .checklist input {
+    margin: 0.35rem 0 0;
+    accent-color: var(--accent);
+    width: 0.95rem;
+    height: 0.95rem;
+    flex-shrink: 0;
+  }
+  .checklist input:checked + span { color: var(--ink-faint); text-decoration: line-through; }
+
+  footer {
+    border-top: 1px solid var(--rule);
+    padding-top: 1rem;
+    font-size: 0.82rem;
+    color: var(--ink-faint);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; animation: none !important; }
+  }
+
+  @media (max-width: 520px) {
+    .step { grid-template-columns: 1fr; gap: 0.5rem; }
+    .num { text-align: left; }
+  }
+</style>
+
+<div class="wrap">
+
+  <header>
+    <span class="eyebrow">Instrukcja dla administratora konta</span>
+    <h1>Dostęp API dla AdsPanel</h1>
+    <p class="lede">
+      Budujemy wewnętrzne narzędzie do zarządzania naszymi kampaniami Sponsored Products.
+      Żeby je podłączyć, potrzebne są trzy rzeczy z Twojej strony. Wszystkie w konsolach,
+      do których masz dostęp jako administrator.
+    </p>
+    <div class="meta">
+      <span>Czas: <b>ok. 10 minut</b></span>
+      <span>Nowy wniosek do Amazona: <b>niepotrzebny</b></span>
+      <span>Etykiety niemieckie podane w nawiasach</span>
+    </div>
+
+    <div class="account">
+      <span class="eyebrow">Konto, którego dotyczy</span>
+      <div class="copy">
+        <code id="account-id">amzn1.ads-account.g.4nupphaeub8xvq5cdwrbyrtud</code>
+        <button type="button" data-copy="account-id">Kopiuj</button>
+      </div>
+    </div>
+  </header>
+
+  <section class="summary">
+    <h2>Co trzeba zrobić</h2>
+    <ol>
+      <li>Przesłać <b>Client ID</b> i <b>Client Secret</b> z istniejącego Security Profile.</li>
+      <li>Dopisać jeden <b>adres zwrotny</b> na liście dozwolonych adresów.</li>
+      <li>Sprawdzić <b>rolę użytkownika</b>, który będzie korzystał z narzędzia.</li>
+    </ol>
+    <p class="small">
+      Dostęp do Ads API na koncie już istnieje — w konsoli reklamowej widać autoryzowane
+      aplikacje. Korzystamy z tego, co jest, więc nie ma potrzeby składania nowego wniosku
+      ani czekania na akceptację Amazona.
+    </p>
+  </section>
+
+  <div class="steps">
+
+    <!-- KROK 1 -->
+    <section class="step">
+      <div class="num">1</div>
+      <div class="step-body">
+        <div class="step-head">
+          <h2>Client ID i Client Secret</h2>
+          <span class="duration">ok. 5 min · konsola deweloperska</span>
+        </div>
+
+        <p>
+          To dane identyfikujące <em>aplikację</em>, nie osobę. Znajdują się w Security Profile,
+          który został utworzony przy uzyskiwaniu dostępu do Ads API dla konta wskazanego powyżej.
+        </p>
+
+        <div class="path">
+          <a href="https://developer.amazon.com/loginwithamazon/console/site/lwa/overview.html">developer.amazon.com</a><span class="sep">→</span><b>Login with Amazon</b><span class="sep">→</span>wybierz Security Profile<span class="sep">→</span>ikona koła zębatego<span class="sep">→</span><b>Web Settings</b>
+        </div>
+
+        <ul class="plain">
+          <li><b>Client ID</b> — długi ciąg zaczynający się od <code style="font-family:'IBM Plex Mono',monospace;font-size:0.85em">amzn1.application-oa2-client.</code></li>
+          <li><b>Client Secret</b> — ukryty, pokazuje się po kliknięciu <b>Show Secret</b></li>
+        </ul>
+
+        <p>Obie wartości prześlij bezpiecznym kanałem — najlepiej menedżerem haseł albo wiadomością, którą da się później usunąć.</p>
+      </div>
+    </section>
+
+    <!-- KROK 2 -->
+    <section class="step">
+      <div class="num">2</div>
+      <div class="step-body">
+        <div class="step-head">
+          <h2>Adres zwrotny</h2>
+          <span class="duration">ok. 1 min · ten sam ekran co w kroku 1</span>
+        </div>
+
+        <p>
+          Bez tego wpisu logowanie do narzędzia nie zadziała — Amazon odrzuci przekierowanie
+          po zalogowaniu. W tej samej zakładce <b>Web Settings</b> jest pole
+          <b>Allowed Return URLs</b>. Dodaj tam:
+        </p>
+
+        <div class="copy">
+          <code id="return-url">http://localhost:9090/redirect</code>
+          <button type="button" data-copy="return-url">Kopiuj</button>
+        </div>
+
+        <div class="note">
+          <b>Musi być dokładnie taki ciąg.</b> Bez ukośnika na końcu, z <code style="font-family:'IBM Plex Mono',monospace;font-size:0.9em">http</code> —
+          nie <code style="font-family:'IBM Plex Mono',monospace;font-size:0.9em">https</code> — i z portem <code style="font-family:'IBM Plex Mono',monospace;font-size:0.9em">9090</code>. Każda różnica, nawet jeden znak, powoduje błąd
+          <em>redirect_uri mismatch</em> i logowanie się nie powiedzie.
+        </div>
+
+        <p class="aside">
+          Adres wskazuje na komputer lokalny, więc nie otwiera niczego na zewnątrz.
+          Służy wyłącznie do jednorazowego przekazania kodu autoryzacyjnego z przeglądarki
+          do narzędzia.
+        </p>
+      </div>
+    </section>
+
+    <!-- KROK 3 -->
+    <section class="step">
+      <div class="num">3</div>
+      <div class="step-body">
+        <div class="step-head">
+          <h2>Rola użytkownika</h2>
+          <span class="duration">ok. 3 min · konsola reklamowa</span>
+        </div>
+
+        <p>
+          Narzędzie działa z uprawnieniami tej osoby, która się w nim zaloguje — ani mniej,
+          ani więcej. Dlatego warto sprawdzić, co ma przypisane konto, które będzie z niego
+          korzystać.
+        </p>
+
+        <div class="path">
+          <a href="https://advertising.amazon.com">advertising.amazon.com</a><span class="sep">→</span>ustawienia konta <span style="color:var(--ink-faint)">(Kontoeinstellungen)</span><span class="sep">→</span>zarządzanie użytkownikami<span class="sep">→</span>kolumna <b>Rolle</b>
+        </div>
+
+        <p>Dwie rzeczy do potwierdzenia:</p>
+
+        <ul class="plain">
+          <li>
+            <b>Rola z prawem edycji.</b> Rola tylko do odczytu wystarczy do raportów i analiz,
+            ale każda próba zmiany stawki, budżetu czy dodania wykluczenia zwróci błąd uprawnień.
+            Nazwy ról różnią się między kontami — chodzi o poziom pozwalający edytować kampanie.
+          </li>
+          <li>
+            <b>Dostęp do wszystkich trzech rynków</b> — DE, ES oraz IT. Narzędzie zobaczy
+            wyłącznie te profile, do których użytkownik ma dostęp. Jeśli brakuje któregoś,
+            ten rynek po prostu nie pojawi się w panelu.
+          </li>
+        </ul>
+      </div>
+    </section>
+
+  </div>
+
+  <!-- CZEGO NIE TRZEBA -->
+  <section class="panel">
+    <h2>Czego nie trzeba robić</h2>
+    <div class="strike">
+      <div><b>Nie udostępniaj hasła</b> ani nie loguj się za kogoś. Każdy loguje się sam, swoim kontem.</div>
+      <div><b>Nie składaj nowego wniosku</b> o dostęp do Ads API. Konto już go ma.</div>
+      <div><b>Nie odłączaj istniejących aplikacji</b> w sekcji „Autorisierung verwalten”. Jeśli któreś z podłączonych narzędzi realnie zarządza kampaniami, odcięcie go zatrzyma jego automatyzacje.</div>
+      <div><b>Nie twórz nowego Security Profile.</b> Korzystamy z tego, który już jest zatwierdzony.</div>
+    </div>
+  </section>
+
+  <!-- BEZPIECZENSTWO -->
+  <section class="panel">
+    <h2>Co to oznacza dla konta</h2>
+    <p class="small">
+      Client Secret identyfikuje aplikację, nie osobę — w obrębie jednej firmy dzielenie go
+      między użytkowników wewnętrznego narzędzia jest normalne. Osobistym poświadczeniem jest
+      token odświeżający, który powstaje dopiero przy logowaniu i zostaje na komputerze
+      użytkownika.
+    </p>
+    <p class="small">
+      Narzędzie <b>nie wprowadza żadnych zmian samodzielnie</b>. Każda modyfikacja — stawki,
+      budżetu, wykluczenia, statusu kampanii — jest najpierw wyliczana jako propozycja
+      i czeka na ręczne zatwierdzenie w panelu. Dotyczy to również reguł automatyzacji:
+      reguła przygotowuje sugestię, nigdy jej nie wykonuje. Każda zatwierdzona zmiana trafia
+      do dziennika ze starą i nową wartością.
+    </p>
+    <p class="small">
+      Dostęp można w każdej chwili cofnąć — wystarczy odebrać uprawnienia użytkownikowi
+      w konsoli reklamowej albo usunąć adres zwrotny z Security Profile.
+    </p>
+  </section>
+
+  <!-- CHECKLIST -->
+  <section class="panel">
+    <h2>Do odesłania</h2>
+    <div class="checklist">
+      <label><input type="checkbox"><span>Client ID</span></label>
+      <label><input type="checkbox"><span>Client Secret</span></label>
+      <label><input type="checkbox"><span>Potwierdzenie, że <code style="font-family:'IBM Plex Mono',monospace;font-size:0.9em">http://localhost:9090/redirect</code> jest na liście Allowed Return URLs</span></label>
+      <label><input type="checkbox"><span>Rola użytkownika oraz rynki, do których ma dostęp</span></label>
+    </div>
+  </section>
+
+  <footer>
+    Pytania kieruj do osoby, która przesłała ten dokument. Jeśli któryś ekran w konsoli
+    wygląda inaczej niż opisano — Amazon regularnie zmienia układ tych stron — wystarczy
+    zrzut ekranu, resztę ustalimy.
+  </footer>
+
+</div>
+
+<script>
+  document.querySelectorAll("button[data-copy]").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      var el = document.getElementById(btn.dataset.copy);
+      var text = el.textContent.trim();
+
+      function done(ok) {
+        btn.textContent = ok ? "Skopiowano" : "Zaznacz ręcznie";
+        btn.dataset.done = ok ? "1" : "";
+        setTimeout(function () {
+          btn.textContent = "Kopiuj";
+          btn.dataset.done = "";
+        }, 2000);
+      }
+
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(function () { done(true); }, function () { select(); });
+      } else {
+        select();
+      }
+
+      // Zaznaczenie tekstu to zapasowe wyjscie, gdy schowek jest zablokowany
+      function select() {
+        var range = document.createRange();
+        range.selectNodeContents(el);
+        var sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(range);
+        done(false);
+      }
+    });
+  });
+</script>

@@ -1,0 +1,292 @@
+<title>Podłączenie konta Amazon Ads</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,400;6..72,600&family=Source+Sans+3:wght@400;600&family=JetBrains+Mono:wght@400;700&display=swap">
+
+<style>
+  :root {
+    --paper: #FBFAF8; --surface: #F2F0EC; --ink: #1B1D21; --muted: #6E7076;
+    --rule: #E1DFDA; --accent: #2F5D50; --accent-soft: #E4EDE9;
+    --warn: #9C3F26; --warn-soft: #F7E9E3; --code-bg: #EDEBE6;
+    --serif: "Newsreader", Georgia, "Times New Roman", serif;
+    --sans: "Source Sans 3", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    --mono: "JetBrains Mono", ui-monospace, "SF Mono", Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --paper: #16181A; --surface: #1F2225; --ink: #E9E7E3; --muted: #9A9C9F;
+      --rule: #2F3336; --accent: #7FB3A0; --accent-soft: #1E2A26;
+      --warn: #E0937A; --warn-soft: #2C1F1A; --code-bg: #22262A;
+    }
+  }
+  :root[data-theme="dark"] {
+    --paper: #16181A; --surface: #1F2225; --ink: #E9E7E3; --muted: #9A9C9F;
+    --rule: #2F3336; --accent: #7FB3A0; --accent-soft: #1E2A26;
+    --warn: #E0937A; --warn-soft: #2C1F1A; --code-bg: #22262A;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--paper); color: var(--ink);
+    font-family: var(--sans); font-size: 17px; line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap {
+    max-width: 44rem; margin: 0 auto;
+    padding: clamp(2rem, 5vw, 4.5rem) clamp(1.1rem, 4vw, 2rem) 5rem;
+    display: flex; flex-direction: column; gap: 2.6rem;
+  }
+
+  header { display: flex; flex-direction: column; gap: 0.6rem; }
+  .eyebrow {
+    font-family: var(--mono); font-size: 0.72rem; letter-spacing: 0.13em;
+    text-transform: uppercase; color: var(--accent);
+  }
+  h1 {
+    font-family: var(--serif); font-weight: 600;
+    font-size: clamp(2rem, 5.5vw, 2.8rem); line-height: 1.12;
+    letter-spacing: -0.015em; margin: 0; text-wrap: balance;
+  }
+  .lede { font-size: 1.06rem; color: var(--muted); margin: 0; max-width: 36rem; }
+  p { margin: 0; }
+  p + p { margin-top: 0.7rem; }
+  strong { font-weight: 600; }
+  section { display: flex; flex-direction: column; gap: 1rem; }
+
+  .part-label {
+    display: flex; align-items: baseline; gap: 0.8rem;
+    border-top: 2px solid var(--ink); padding-top: 0.7rem;
+  }
+  .part-num {
+    font-family: var(--mono); font-size: 0.72rem; letter-spacing: 0.12em;
+    text-transform: uppercase; color: var(--accent); font-weight: 700;
+  }
+  h2 {
+    font-family: var(--serif); font-weight: 600; font-size: 1.5rem;
+    line-height: 1.2; margin: 0; text-wrap: balance;
+  }
+  h3 {
+    font-family: var(--serif); font-weight: 600; font-size: 1.2rem;
+    line-height: 1.25; margin: 0; text-wrap: balance;
+  }
+
+  .czas {
+    display: inline-flex; align-items: center; gap: 0.4rem;
+    font-family: var(--mono); font-size: 0.75rem;
+    color: var(--accent); background: var(--accent-soft);
+    padding: 0.25rem 0.6rem; border-radius: 3px; align-self: flex-start;
+  }
+
+  ol.steps {
+    list-style: none; margin: 0; padding: 0;
+    display: flex; flex-direction: column; gap: 2rem; counter-reset: krok;
+  }
+  ol.steps > li {
+    display: grid; grid-template-columns: 2.6rem 1fr; gap: 0 1rem; align-items: start;
+  }
+  ol.steps > li::before {
+    counter-increment: krok; content: counter(krok);
+    font-family: var(--mono); font-size: 0.85rem; font-weight: 700;
+    color: var(--accent); background: var(--accent-soft); border-radius: 999px;
+    width: 2rem; height: 2rem; display: grid; place-items: center; margin-top: 0.1rem;
+  }
+  .step-body { display: flex; flex-direction: column; gap: 0.7rem; min-width: 0; }
+
+  pre {
+    margin: 0; background: var(--code-bg); border: 1px solid var(--rule);
+    border-radius: 3px; padding: 0.7rem 0.85rem; overflow-x: auto;
+    font-family: var(--mono); font-size: 0.8rem; line-height: 1.5;
+  }
+  code.inline {
+    font-family: var(--mono); font-size: 0.85em; background: var(--code-bg);
+    padding: 0.1em 0.35em; border-radius: 2px;
+  }
+  .note {
+    border-left: 2px solid var(--accent); padding: 0.15rem 0 0.15rem 0.9rem;
+    color: var(--muted); font-size: 0.95rem;
+  }
+  .danger {
+    background: var(--warn-soft);
+    border: 1px solid color-mix(in srgb, var(--warn) 30%, transparent);
+    border-radius: 3px; padding: 0.9rem 1.1rem;
+    display: flex; flex-direction: column; gap: 0.4rem;
+  }
+  .danger-label {
+    font-family: var(--mono); font-size: 0.7rem; letter-spacing: 0.12em;
+    text-transform: uppercase; color: var(--warn); font-weight: 700;
+  }
+  .danger p { font-size: 0.97rem; }
+
+  .scope { border: 1px solid var(--rule); border-radius: 3px; }
+  .scope-row {
+    display: grid; grid-template-columns: 4.2rem 1fr; gap: 0.9rem;
+    padding: 0.7rem 1.1rem; border-bottom: 1px solid var(--rule);
+    font-size: 0.97rem; align-items: baseline;
+  }
+  .scope-row:last-child { border-bottom: 0; }
+  .scope-tag {
+    font-family: var(--mono); font-size: 0.72rem; letter-spacing: 0.06em;
+    text-transform: uppercase; font-weight: 700;
+  }
+  .yes { color: var(--accent); }
+  .no { color: var(--warn); }
+
+  ul.plain { margin: 0; padding-left: 1.15rem; display: flex; flex-direction: column; gap: 0.35rem; }
+  ul.plain li::marker { color: var(--muted); }
+
+  footer {
+    border-top: 1px solid var(--rule); padding-top: 1.4rem;
+    color: var(--muted); font-size: 0.95rem;
+    display: flex; flex-direction: column; gap: 0.5rem;
+  }
+  footer strong { color: var(--ink); }
+</style>
+
+<div class="wrap">
+
+  <header>
+    <div class="eyebrow">Instrukcja dla klienta</div>
+    <h1>Podłączenie konta Amazon Ads</h1>
+    <p class="lede">
+      Nie zakładasz konta deweloperskiego, nie generujesz żadnych kluczy
+      i nie wysyłasz haseł. Klikasz jeden link i odsyłasz adres, który
+      pojawi się w przeglądarce.
+    </p>
+    <span class="czas">około 2 minut</span>
+  </header>
+
+  <section>
+    <div class="part-label">
+      <span class="part-num">Krok po kroku</span>
+      <h2>Co masz zrobić</h2>
+    </div>
+  </section>
+
+  <ol class="steps">
+    <li>
+      <div class="step-body">
+        <h3>Zaloguj się na właściwe konto</h3>
+        <p>
+          Otwórz przeglądarkę w <strong>trybie prywatnym</strong> (Ctrl+Shift+N
+          w Chrome). To nie jest formalność: jeśli w zwykłym oknie masz
+          zalogowane inne konto Amazon, autoryzacja podepnie właśnie tamto
+          i trzeba będzie zaczynać od nowa.
+        </p>
+        <p>
+          Zaloguj się na <code class="inline">advertising.amazon.com</code> na
+          konto reklamowe, które ma zostać podłączone.
+        </p>
+        <p class="note">
+          Twoja rola na koncie musi pozwalać na zarządzanie kampaniami. Sam
+          podgląd nie wystarczy — narzędzie nie zobaczy wtedy części danych.
+        </p>
+      </div>
+    </li>
+
+    <li>
+      <div class="step-body">
+        <h3>Otwórz link, który dostałeś ode mnie</h3>
+        <p>
+          Wklej go w tym samym oknie prywatnym. Amazon pokaże ekran zgody
+          z nazwą aplikacji i zakresem dostępu. Potwierdź przyciskiem
+          <strong>Zezwól</strong> (albo <strong>Allow</strong>).
+        </p>
+      </div>
+    </li>
+
+    <li>
+      <div class="step-body">
+        <h3>Skopiuj adres z paska i odeślij</h3>
+        <p>
+          Po potwierdzeniu przeglądarka spróbuje otworzyć stronę, która
+          <strong>się nie załaduje</strong>. Zobaczysz komunikat w rodzaju
+          „Nie można nawiązać połączenia".
+        </p>
+        <div class="danger">
+          <span class="danger-label">To nie jest błąd</span>
+          <p>
+            Tak ma być. Adres celowo prowadzi do miejsca, które nie istnieje —
+            liczy się wyłącznie to, co Amazon dopisał do niego po drodze.
+            Nie zamykaj tej karty.
+          </p>
+        </div>
+        <p>
+          Skopiuj <strong>cały adres z paska adresu</strong>. Wygląda mniej
+          więcej tak:
+        </p>
+        <pre>http://localhost:9090/redirect?code=ANbXaKt...&amp;scope=advertising</pre>
+        <p>Odeślij mi go w całości.</p>
+      </div>
+    </li>
+  </ol>
+
+  <section>
+    <div class="danger">
+      <span class="danger-label">Odeślij od razu</span>
+      <p>
+        Kod w tym adresie jest <strong>jednorazowy i ważny około pięciu
+        minut</strong>. Jeśli minie więcej czasu, nic się nie psuje — po prostu
+        otwórz link jeszcze raz i wyślij nowy adres.
+      </p>
+    </div>
+  </section>
+
+  <section>
+    <div class="part-label">
+      <span class="part-num">Zakres</span>
+      <h2>Na co się zgadzasz</h2>
+    </div>
+    <div class="scope">
+      <div class="scope-row">
+        <span class="scope-tag yes">Tak</span>
+        <span>Narzędzie <strong>czyta</strong> dane kampanii: wydatki, sprzedaż z reklam, frazy wyszukiwania.</span>
+      </div>
+      <div class="scope-row">
+        <span class="scope-tag yes">Tak</span>
+        <span>Może wprowadzać zmiany w kampaniach — stawki, budżety, wykluczenia — ale <strong>każda wymaga osobnego, ręcznego zatwierdzenia</strong>. Nic nie dzieje się samo.</span>
+      </div>
+      <div class="scope-row">
+        <span class="scope-tag no">Nie</span>
+        <span>Nie ma dostępu do danych kupujących, metod płatności ani zamówień.</span>
+      </div>
+      <div class="scope-row">
+        <span class="scope-tag no">Nie</span>
+        <span>Nie zmienia niczego po stronie sprzedażowej — ofert, cen ani stanów magazynowych.</span>
+      </div>
+      <div class="scope-row">
+        <span class="scope-tag yes">Tak</span>
+        <span>Dostęp cofniesz w każdej chwili: konsola Amazon Ads → ustawienia konta → autoryzowane aplikacje.</span>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="part-label">
+      <span class="part-num">Opcjonalnie</span>
+      <h2>Raporty sprzedaży</h2>
+    </div>
+    <p>
+      Powyższe podłącza <strong>reklamy</strong>. Amazon Ads zna jednak wyłącznie
+      sprzedaż przypisaną do reklam — sprzedaży organicznej nie zna wcale.
+    </p>
+    <p>
+      Jeśli chcesz widzieć <strong>TACOS</strong>, czyli udział wydatku na
+      reklamę w całym przychodzie, potrzebne jest drugie, osobne podłączenie —
+      po stronie Seller Central. Wymaga kilkunastu minut po Twojej stronie
+      i osobnej instrukcji, którą wyślę na życzenie.
+    </p>
+    <p class="note">
+      Bez tego panel działa normalnie. Policzy ACOS, nie policzy TACOS.
+    </p>
+  </section>
+
+  <footer>
+    <p><strong>Do odesłania:</strong> jeden adres skopiowany z paska przeglądarki w kroku 3.</p>
+    <p>
+      Ten adres zawiera jednorazowy kod dostępu, więc potraktuj go jak hasło —
+      wyślij wiadomością, którą da się później usunąć, a nie publicznym kanałem.
+      Po wymianie na token kod przestaje działać.
+    </p>
+  </footer>
+
+</div>

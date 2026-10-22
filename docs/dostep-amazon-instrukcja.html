@@ -1,0 +1,462 @@
+<!doctype html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dostępy do konta Amazon</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,400;6..72,600&family=Source+Sans+3:wght@400;600&family=JetBrains+Mono:wght@400;700&display=swap">
+
+<style>
+  :root {
+    --paper: #FBFAF8; --surface: #F2F0EC; --ink: #1B1D21; --muted: #6E7076;
+    --rule: #E1DFDA; --accent: #2F5D50; --accent-soft: #E4EDE9;
+    --warn: #9C3F26; --warn-soft: #F7E9E3; --code-bg: #EDEBE6;
+    --serif: "Newsreader", Georgia, "Times New Roman", serif;
+    --sans: "Source Sans 3", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    --mono: "JetBrains Mono", ui-monospace, "SF Mono", Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --paper: #16181A; --surface: #1F2225; --ink: #E9E7E3; --muted: #9A9C9F;
+      --rule: #2F3336; --accent: #7FB3A0; --accent-soft: #1E2A26;
+      --warn: #E0937A; --warn-soft: #2C1F1A; --code-bg: #22262A;
+    }
+  }
+  :root[data-theme="dark"] {
+    --paper: #16181A; --surface: #1F2225; --ink: #E9E7E3; --muted: #9A9C9F;
+    --rule: #2F3336; --accent: #7FB3A0; --accent-soft: #1E2A26;
+    --warn: #E0937A; --warn-soft: #2C1F1A; --code-bg: #22262A;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--paper); color: var(--ink);
+    font-family: var(--sans); font-size: 17px; line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap {
+    max-width: 46rem; margin: 0 auto;
+    padding: clamp(2rem, 5vw, 4.5rem) clamp(1.1rem, 4vw, 2rem) 5rem;
+    display: flex; flex-direction: column; gap: 2.8rem;
+  }
+
+  header { display: flex; flex-direction: column; gap: 0.6rem; }
+  .eyebrow {
+    font-family: var(--mono); font-size: 0.72rem; letter-spacing: 0.13em;
+    text-transform: uppercase; color: var(--accent);
+  }
+  h1 {
+    font-family: var(--serif); font-weight: 600;
+    font-size: clamp(2rem, 5.5vw, 2.9rem); line-height: 1.12;
+    letter-spacing: -0.015em; margin: 0; text-wrap: balance;
+  }
+  .lede { font-size: 1.06rem; color: var(--muted); margin: 0; max-width: 38rem; }
+
+  .part-label {
+    display: flex; align-items: baseline; gap: 0.8rem;
+    border-top: 2px solid var(--ink); padding-top: 0.7rem;
+  }
+  .part-num {
+    font-family: var(--mono); font-size: 0.72rem; letter-spacing: 0.12em;
+    text-transform: uppercase; color: var(--accent); font-weight: 700;
+  }
+  h2 {
+    font-family: var(--serif); font-weight: 600; font-size: 1.55rem;
+    line-height: 1.2; margin: 0; text-wrap: balance;
+  }
+  h3 {
+    font-family: var(--serif); font-weight: 600; font-size: 1.22rem;
+    line-height: 1.25; margin: 0; text-wrap: balance;
+  }
+  p { margin: 0; }
+  p + p { margin-top: 0.7rem; }
+  strong { font-weight: 600; }
+  section { display: flex; flex-direction: column; gap: 1.1rem; }
+
+  .meta {
+    display: flex; flex-wrap: wrap; gap: 0.4rem 1.4rem;
+    font-size: 0.92rem; color: var(--muted);
+  }
+  .meta b { color: var(--ink); font-weight: 600; }
+
+  .fork {
+    border: 1px solid var(--rule); border-radius: 3px;
+    background: var(--surface); overflow: hidden;
+  }
+  .fork-head {
+    padding: 0.9rem 1.15rem; border-bottom: 1px solid var(--rule);
+    font-family: var(--serif); font-size: 1.1rem; font-weight: 600;
+  }
+  .fork-body { padding: 1.15rem; display: flex; flex-direction: column; gap: 0.9rem; }
+  .fork-opt { display: grid; grid-template-columns: auto 1fr; gap: 0.2rem 0.8rem; align-items: baseline; }
+  .tick {
+    font-family: var(--mono); font-size: 0.72rem; font-weight: 700;
+    color: var(--accent); background: var(--accent-soft);
+    padding: 0.12rem 0.45rem; border-radius: 2px; white-space: nowrap;
+  }
+  .fork-opt p { grid-column: 2; font-size: 0.97rem; }
+
+  ol.steps {
+    list-style: none; margin: 0; padding: 0;
+    display: flex; flex-direction: column; gap: 2.2rem; counter-reset: krok;
+  }
+  ol.steps > li {
+    display: grid; grid-template-columns: 2.6rem 1fr; gap: 0 1rem; align-items: start;
+  }
+  ol.steps > li::before {
+    counter-increment: krok; content: counter(krok);
+    font-family: var(--mono); font-size: 0.85rem; font-weight: 700;
+    color: var(--accent); background: var(--accent-soft); border-radius: 999px;
+    width: 2rem; height: 2rem; display: grid; place-items: center; margin-top: 0.1rem;
+  }
+  .step-body { display: flex; flex-direction: column; gap: 0.7rem; min-width: 0; }
+  .step-when {
+    font-family: var(--mono); font-size: 0.72rem; letter-spacing: 0.06em;
+    color: var(--muted); text-transform: uppercase;
+  }
+
+  .path {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 0.35rem;
+    font-family: var(--mono); font-size: 0.8rem;
+    background: var(--code-bg); border: 1px solid var(--rule);
+    border-radius: 3px; padding: 0.6rem 0.8rem;
+  }
+  .path .sep { color: var(--muted); }
+
+  pre {
+    margin: 0; background: var(--code-bg); border: 1px solid var(--rule);
+    border-radius: 3px; padding: 0.75rem 0.9rem; overflow-x: auto;
+    font-family: var(--mono); font-size: 0.84rem; line-height: 1.5;
+  }
+  code.inline {
+    font-family: var(--mono); font-size: 0.85em; background: var(--code-bg);
+    padding: 0.1em 0.35em; border-radius: 2px;
+  }
+  .note {
+    border-left: 2px solid var(--accent); padding: 0.15rem 0 0.15rem 0.9rem;
+    color: var(--muted); font-size: 0.95rem;
+  }
+  .danger {
+    background: var(--warn-soft);
+    border: 1px solid color-mix(in srgb, var(--warn) 30%, transparent);
+    border-radius: 3px; padding: 0.9rem 1.1rem;
+    display: flex; flex-direction: column; gap: 0.4rem;
+  }
+  .danger-label {
+    font-family: var(--mono); font-size: 0.7rem; letter-spacing: 0.12em;
+    text-transform: uppercase; color: var(--warn); font-weight: 700;
+  }
+  .danger p { font-size: 0.97rem; }
+
+  .scope { border: 1px solid var(--rule); border-radius: 3px; }
+  .scope-row {
+    display: grid; grid-template-columns: 4.5rem 1fr; gap: 0.9rem;
+    padding: 0.7rem 1.1rem; border-bottom: 1px solid var(--rule);
+    font-size: 0.97rem; align-items: baseline;
+  }
+  .scope-row:last-child { border-bottom: 0; }
+  .scope-tag {
+    font-family: var(--mono); font-size: 0.72rem; letter-spacing: 0.06em;
+    text-transform: uppercase; font-weight: 700;
+  }
+  .yes { color: var(--accent); }
+  .no { color: var(--warn); }
+
+  ul.plain { margin: 0; padding-left: 1.15rem; display: flex; flex-direction: column; gap: 0.35rem; }
+  ul.plain li::marker { color: var(--muted); }
+
+  footer {
+    border-top: 1px solid var(--rule); padding-top: 1.4rem;
+    color: var(--muted); font-size: 0.92rem;
+    display: flex; flex-direction: column; gap: 0.5rem;
+  }
+  footer strong { color: var(--ink); }
+</style>
+<style>
+  *, *::before, *::after { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body { margin: 0; }
+  img, svg { max-width: 100%; display: block; }
+
+  /* Druk / zapis do PDF - bez ciemnego motywu i bez lamania sekcji w polowie. */
+  @media print {
+    :root {
+      --paper: #fff; --surface: #fff; --ink: #000; --muted: #444;
+      --rule: #ccc; --accent: #2F5D50; --accent-soft: #E4EDE9;
+      --warn: #9C3F26; --warn-soft: #F7E9E3; --code-bg: #F0EEE9;
+    }
+    body { font-size: 11pt; }
+    .wrap { padding: 0; gap: 1.6rem; max-width: none; }
+    ol.steps > li, section, .fork, .danger { break-inside: avoid; }
+    h1, h2, h3 { break-after: avoid; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div class="eyebrow">Instrukcja dla administratora konta</div>
+    <h1>Dostępy do konta Amazon</h1>
+    <p class="lede">
+      Podłączamy wewnętrzne narzędzie do zarządzania Waszymi kampaniami.
+      Potrzebne są <strong>dwie osobne integracje</strong> — reklamowa
+      i sprzedażowa. Można je nadać niezależnie; pierwsza wystarczy, żeby
+      zacząć.
+    </p>
+    <div class="meta">
+      <span><b>Część I:</b> ok. 10 minut</span>
+      <span><b>Część II:</b> ok. 15 minut plus oczekiwanie Amazona</span>
+    </div>
+  </header>
+
+  <!-- ══════════════ CZĘŚĆ I ══════════════ -->
+  <section>
+    <div class="part-label">
+      <span class="part-num">Część I</span>
+      <h2>Amazon Ads API</h2>
+    </div>
+    <p>
+      Daje narzędziu dostęp do kampanii: wydatków, sprzedaży z reklam
+      i fraz wyszukiwania. To integracja podstawowa — bez niej narzędzie
+      nie ma czego pokazywać.
+    </p>
+  </section>
+
+  <section class="fork">
+    <div class="fork-head">Zacznijcie od jednego sprawdzenia</div>
+    <div class="fork-body">
+      <p>
+        W konsoli reklamowej, w ustawieniach konta, jest lista autoryzowanych
+        aplikacji. To jedno spojrzenie decyduje, czy czeka Was 10 minut, czy
+        dodatkowo dwa dni.
+      </p>
+      <div class="fork-opt">
+        <span class="tick">coś tam jest</span>
+        <p>Dostęp API już istnieje. Pomijacie krok&nbsp;1.</p>
+      </div>
+      <div class="fork-opt">
+        <span class="tick">pusto</span>
+        <p>Trzeba złożyć wniosek — krok&nbsp;1.</p>
+      </div>
+    </div>
+  </section>
+
+  <ol class="steps">
+    <li>
+      <div class="step-body">
+        <span class="step-when">tylko gdy dostępu jeszcze nie ma &middot; 1–2 dni</span>
+        <h3>Wniosek o dostęp do Ads API</h3>
+        <p>
+          Wejście prowadzi z dokumentacji Amazon Ads API, przez
+          <strong>Get started</strong> / <strong>Request access</strong>.
+          Wniosek składa właściciel konta albo administrator — Amazon wiąże
+          dostęp z kontem, nie z narzędziem.
+        </p>
+        <p>
+          W formularzu pada pytanie, kto i po co będzie korzystał z API.
+          Zgodna z prawdą odpowiedź brzmi: <em>wewnętrzne narzędzie do
+          zarządzania własnymi kampaniami reklamowymi</em>. To wystarcza —
+          nie jest to aplikacja dla klientów zewnętrznych.
+        </p>
+        <p class="note">
+          Amazon czasem dopytuje mailem. Warto sprawdzać skrzynkę tej samej
+          osoby, która wysyłała wniosek.
+        </p>
+      </div>
+    </li>
+
+    <li>
+      <div class="step-body">
+        <span class="step-when">ok. 5 minut &middot; konsola deweloperska</span>
+        <h3>Client ID i Client Secret</h3>
+        <p>
+          To dane identyfikujące <strong>aplikację</strong>, nie osobę.
+          Znajdują się w Security Profile powiązanym z Waszym kontem reklamowym.
+        </p>
+        <div class="path">
+          <span>developer.amazon.com</span><span class="sep">→</span>
+          <span>Login with Amazon</span><span class="sep">→</span>
+          <span>Security Profile</span><span class="sep">→</span>
+          <span>Web Settings</span>
+        </div>
+        <ul class="plain">
+          <li><strong>Client ID</strong> — zaczyna się od <code class="inline">amzn1.application-oa2-client.</code></li>
+          <li><strong>Client Secret</strong> — ukryty, pokazuje się po kliknięciu <em>Show Secret</em></li>
+        </ul>
+      </div>
+    </li>
+
+    <li>
+      <div class="step-body">
+        <span class="step-when">ok. 1 minuta &middot; ten sam ekran</span>
+        <h3>Adres zwrotny</h3>
+        <p>
+          W tej samej zakładce <strong>Web Settings → Edit</strong> jest pole
+          <strong>Allowed Return URLs</strong>. Dodajcie tam dokładnie:
+        </p>
+        <pre>http://localhost:9090/redirect</pre>
+        <p>
+          <strong>Musi być dokładnie taki ciąg.</strong> Bez ukośnika na końcu,
+          z <code class="inline">http</code> — nie <code class="inline">https</code> —
+          i z portem <code class="inline">9090</code>. Każda różnica, nawet jeden
+          znak, kończy się błędem <code class="inline">redirect_uri mismatch</code>.
+        </p>
+        <p class="note">
+          Adres wskazuje na komputer lokalny. Nie otwiera niczego na zewnątrz
+          i nie jest dostępny z internetu — służy wyłącznie do odebrania
+          odpowiedzi Amazona podczas jednorazowego logowania.
+        </p>
+      </div>
+    </li>
+
+    <li>
+      <div class="step-body">
+        <span class="step-when">ok. 1 minuta &middot; konsola reklamowa</span>
+        <h3>Rola użytkownika</h3>
+        <p>
+          Osoba, która będzie korzystać z narzędzia, musi mieć na koncie
+          reklamowym rolę pozwalającą <strong>zarządzać kampaniami</strong>.
+          Sam podgląd nie wystarczy — narzędzie nie zobaczy wtedy części danych.
+        </p>
+      </div>
+    </li>
+  </ol>
+
+  <!-- ══════════════ CZĘŚĆ II ══════════════ -->
+  <section>
+    <div class="part-label">
+      <span class="part-num">Część II</span>
+      <h2>Raporty sprzedaży (SP-API)</h2>
+    </div>
+    <p>
+      Druga, całkowicie osobna integracja. Wymaga uprawnień właściciela konta,
+      dlatego trafia do Was, a nie do użytkownika subkonta.
+    </p>
+  </section>
+
+  <section>
+    <h3>Dlaczego to osobna sprawa</h3>
+    <p>
+      Ads API zna wyłącznie sprzedaż <em>przypisaną do reklam</em>. Sprzedaży
+      organicznej nie zna wcale — sprawdziliśmy wszystkie kolumny wszystkich
+      raportów. Bez niej nie da się policzyć TACOS, czyli stosunku wydatków
+      na reklamę do <strong>całego</strong> przychodu.
+    </p>
+    <p>
+      Tę brakującą część daje Selling Partner API. To odrębne API, z odrębną
+      rejestracją i odrębnymi kluczami — istniejącej aplikacji reklamowej nie
+      da się do tego użyć.
+    </p>
+    <p>
+      Daje też pełną listę ofert: ceny, stany magazynowe i produkty, których
+      nigdy nie reklamowano. Bez tego narzędzie widzi tylko to, co już jest
+      w kampaniach.
+    </p>
+  </section>
+
+  <ol class="steps">
+    <li>
+      <div class="step-body">
+        <span class="step-when">Seller Central &middot; konto główne</span>
+        <h3>Rejestracja dewelopera</h3>
+        <div class="path">
+          <span>Seller Central</span><span class="sep">→</span>
+          <span>Apps and Services</span><span class="sep">→</span>
+          <span>Develop Apps</span>
+        </div>
+        <p class="note">
+          Jeśli konto zostało już przeniesione do Solution Provider Portal,
+          ta sama strona jest dostępna stamtąd.
+        </p>
+      </div>
+    </li>
+
+    <li>
+      <div class="step-body">
+        <span class="step-when">profil dewelopera</span>
+        <h3>Typ integracji i rola</h3>
+        <p>W sekcji <strong>Data Access</strong> wybierzcie opcję dla integracji własnej firmy:</p>
+        <pre>Private Developer: I build application(s) that integrate
+my own company with Amazon Services APIs</pre>
+        <p>W sekcji <strong>Roles</strong> zaznaczcie <strong>wyłącznie</strong>:</p>
+        <pre>Brand Analytics</pre>
+        <div class="danger">
+          <span class="danger-label">Nie zaznaczajcie nic więcej</span>
+          <p>
+            Role oznaczone jako <em>restricted</em> i wszystko związane z danymi
+            kupujących uruchamiają ankietę bezpieczeństwa i znacznie dłuższą
+            procedurę. Do raportu sprzedaży nie są potrzebne — nie prosimy
+            o żadne dane osobowe klientów.
+          </p>
+        </div>
+      </div>
+    </li>
+
+    <li>
+      <div class="step-body">
+        <span class="step-when">po akceptacji Amazona</span>
+        <h3>Klucze aplikacji</h3>
+        <p>
+          Po zatwierdzeniu w tym samym miejscu pojawią się <strong>Client ID</strong>
+          i <strong>Client Secret</strong> — inne niż te z części I. Obie
+          integracje mają własne, niezależne klucze.
+        </p>
+        <p class="note">
+          Rola Brand Analytics bywa nadawana z opóźnieniem — u nas trwało to
+          około pół godziny po akceptacji. Jeśli pierwsze połączenie nie działa,
+          zwykle wystarczy odczekać.
+        </p>
+      </div>
+    </li>
+  </ol>
+
+  <!-- ══════════════ ZAKRES ══════════════ -->
+  <section>
+    <div class="part-label">
+      <span class="part-num">Zakres</span>
+      <h2>Co to oznacza dla konta</h2>
+    </div>
+    <div class="scope">
+      <div class="scope-row">
+        <span class="scope-tag yes">Tak</span>
+        <span>Narzędzie <strong>czyta</strong> dane kampanii i sprzedaży: wydatki, przychód, frazy wyszukiwania, stany magazynowe.</span>
+      </div>
+      <div class="scope-row">
+        <span class="scope-tag yes">Tak</span>
+        <span>Może wprowadzać zmiany w kampaniach — stawki, budżety, wykluczenia — ale <strong>każda wymaga osobnego, ręcznego zatwierdzenia</strong>. Nic nie dzieje się automatycznie.</span>
+      </div>
+      <div class="scope-row">
+        <span class="scope-tag no">Nie</span>
+        <span>Nie ma dostępu do danych osobowych kupujących ani do metod płatności.</span>
+      </div>
+      <div class="scope-row">
+        <span class="scope-tag no">Nie</span>
+        <span>Nie zmienia niczego po stronie sprzedażowej — ofert, cen, stanów magazynowych ani zamówień.</span>
+      </div>
+      <div class="scope-row">
+        <span class="scope-tag no">Nie</span>
+        <span>Nie udostępnia niczego na zewnątrz. Dane pozostają na naszym serwerze.</span>
+      </div>
+      <div class="scope-row">
+        <span class="scope-tag yes">Tak</span>
+        <span>Dostęp można cofnąć w każdej chwili — usuwając aplikację z listy autoryzowanych.</span>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    <p><strong>Do odesłania — część I:</strong> Client ID i Client Secret z Security Profile, plus potwierdzenie, że adres zwrotny został dodany.</p>
+    <p><strong>Do odesłania — część II:</strong> Client ID i Client Secret z Seller Central.</p>
+    <p>
+      Client Secret to hasło do konta. Prześlijcie oba menedżerem haseł albo
+      wiadomością, którą da się później usunąć — nie zwykłym mailem, który
+      zostanie w archiwum na lata.
+    </p>
+  </footer>
+
+</div>
+</body>
+</html>

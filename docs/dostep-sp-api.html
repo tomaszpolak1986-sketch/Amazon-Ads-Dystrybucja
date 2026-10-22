@@ -1,0 +1,511 @@
+<title>Dostęp SP-API dla AdsPanel</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap">
+
+<style>
+  :root {
+    --paper:    #f4f6f8;
+    --surface:  #ffffff;
+    --sunk:     #eceff3;
+    --rule:     #dce1e7;
+    --rule-soft:#e8ecf1;
+    --ink:      #18212c;
+    --ink-soft: #5b6675;
+    --ink-faint:#8a93a1;
+    --accent:   #2d5d8a;
+    --accent-bg:#e6eef6;
+    --signal:   #a35d15;
+    --signal-bg:#faeee0;
+    --shadow:   0 1px 2px rgba(24, 33, 44, .06), 0 8px 24px -12px rgba(24, 33, 44, .18);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --paper:    #10151b;
+      --surface:  #172029;
+      --sunk:     #1e2831;
+      --rule:     #2b3742;
+      --rule-soft:#232e38;
+      --ink:      #e6ebf1;
+      --ink-soft: #a3aeba;
+      --ink-faint:#717d8a;
+      --accent:   #7cb3e0;
+      --accent-bg:#1a2a38;
+      --signal:   #e0a765;
+      --signal-bg:#2e2417;
+      --shadow:   0 1px 2px rgba(0, 0, 0, .4), 0 8px 24px -12px rgba(0, 0, 0, .7);
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --paper:    #10151b;
+    --surface:  #172029;
+    --sunk:     #1e2831;
+    --rule:     #2b3742;
+    --rule-soft:#232e38;
+    --ink:      #e6ebf1;
+    --ink-soft: #a3aeba;
+    --ink-faint:#717d8a;
+    --accent:   #7cb3e0;
+    --accent-bg:#1a2a38;
+    --signal:   #e0a765;
+    --signal-bg:#2e2417;
+    --shadow:   0 1px 2px rgba(0, 0, 0, .4), 0 8px 24px -12px rgba(0, 0, 0, .7);
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: "IBM Plex Sans", system-ui, -apple-system, Segoe UI, sans-serif;
+    font-size: 16px;
+    line-height: 1.62;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap {
+    max-width: 46rem;
+    margin: 0 auto;
+    padding: 3.5rem 1.5rem 6rem;
+  }
+
+  header { margin-bottom: 2.75rem; }
+
+  .eyebrow {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: .72rem;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    margin: 0 0 .6rem;
+  }
+
+  h1 {
+    font-family: Archivo, system-ui, sans-serif;
+    font-weight: 700;
+    font-size: clamp(1.7rem, 4.5vw, 2.3rem);
+    line-height: 1.15;
+    letter-spacing: -.018em;
+    text-wrap: balance;
+    margin: 0 0 .9rem;
+  }
+
+  .lede {
+    font-size: 1.03rem;
+    color: var(--ink-soft);
+    margin: 0;
+    max-width: 40rem;
+  }
+
+  h2 {
+    font-family: Archivo, system-ui, sans-serif;
+    font-weight: 600;
+    font-size: 1.18rem;
+    letter-spacing: -.01em;
+    margin: 2.9rem 0 .9rem;
+    padding-top: 1.4rem;
+    border-top: 1px solid var(--rule);
+  }
+
+  h2:first-of-type { border-top: none; padding-top: 0; margin-top: 2rem; }
+
+  h3 {
+    font-family: Archivo, system-ui, sans-serif;
+    font-weight: 600;
+    font-size: .96rem;
+    margin: 1.6rem 0 .5rem;
+  }
+
+  p { margin: 0 0 .9rem; }
+
+  a { color: var(--accent); text-underline-offset: .18em; }
+
+  /* Kroki — numeracja niesie kolejność, którą trzeba zachować */
+  ol.steps { list-style: none; counter-reset: krok; margin: 0; padding: 0; }
+
+  ol.steps > li {
+    counter-increment: krok;
+    position: relative;
+    padding: 0 0 1.6rem 3.1rem;
+    border-left: 1px solid var(--rule);
+    margin-left: 1rem;
+  }
+
+  ol.steps > li:last-child { border-left-color: transparent; padding-bottom: 0; }
+
+  ol.steps > li::before {
+    content: counter(krok);
+    position: absolute;
+    left: -1rem;
+    top: -.15rem;
+    width: 2rem;
+    height: 2rem;
+    display: grid;
+    place-items: center;
+    border-radius: 50%;
+    background: var(--accent);
+    color: #fff;
+    font-family: "IBM Plex Mono", monospace;
+    font-size: .8rem;
+    font-weight: 500;
+  }
+
+  :root[data-theme="dark"] ol.steps > li::before,
+  :root:not([data-theme="light"]) ol.steps > li::before { color: #10151b; }
+
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]) ol.steps > li::before { color: #fff; }
+  }
+
+  .step-title {
+    font-family: Archivo, system-ui, sans-serif;
+    font-weight: 600;
+    font-size: 1.02rem;
+    margin: 0 0 .35rem;
+  }
+
+  .path {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: .84rem;
+    background: var(--sunk);
+    border: 1px solid var(--rule-soft);
+    border-radius: 6px;
+    padding: .5rem .7rem;
+    display: inline-block;
+    margin: .1rem 0 .7rem;
+    color: var(--ink);
+  }
+
+  code {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: .87em;
+    background: var(--sunk);
+    padding: .1em .35em;
+    border-radius: 4px;
+  }
+
+  .note, .warn {
+    border-radius: 8px;
+    padding: .85rem 1.05rem;
+    margin: 1rem 0;
+    font-size: .93rem;
+  }
+
+  .note { background: var(--accent-bg); border-left: 3px solid var(--accent); }
+  .warn { background: var(--signal-bg); border-left: 3px solid var(--signal); }
+
+  .note strong, .warn strong { font-weight: 600; }
+  .warn strong { color: var(--signal); }
+
+  .paste {
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-radius: 8px;
+    box-shadow: var(--shadow);
+    margin: .8rem 0 1.4rem;
+    overflow: hidden;
+  }
+
+  .paste-head {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: .72rem;
+    letter-spacing: .09em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    padding: .55rem .95rem;
+    border-bottom: 1px solid var(--rule-soft);
+    background: var(--sunk);
+  }
+
+  .paste-body {
+    padding: .9rem .95rem;
+    font-size: .91rem;
+    color: var(--ink);
+  }
+
+  .paste-body p { margin: 0 0 .7rem; }
+  .paste-body p:last-child { margin-bottom: 0; }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: .93rem;
+    margin: 1rem 0 1.4rem;
+  }
+
+  th, td {
+    text-align: left;
+    padding: .6rem .7rem;
+    border-bottom: 1px solid var(--rule-soft);
+    vertical-align: top;
+  }
+
+  th {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: .72rem;
+    letter-spacing: .07em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    font-weight: 500;
+    border-bottom-color: var(--rule);
+  }
+
+  td:first-child { font-family: "IBM Plex Mono", monospace; font-size: .85rem; white-space: nowrap; }
+
+  .scroll { overflow-x: auto; }
+
+  ul.plain { margin: 0 0 1rem; padding-left: 1.15rem; }
+  ul.plain li { margin-bottom: .35rem; }
+
+  .send {
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-radius: 10px;
+    padding: 1.3rem 1.4rem;
+    box-shadow: var(--shadow);
+    margin-top: 1rem;
+  }
+
+  .field {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: .87rem;
+    padding: .55rem 0;
+    border-bottom: 1px dashed var(--rule);
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    flex-wrap: wrap;
+  }
+
+  .field:last-child { border-bottom: none; }
+  .field span:last-child { color: var(--ink-faint); font-size: .8rem; }
+
+  footer {
+    margin-top: 3rem;
+    padding-top: 1.3rem;
+    border-top: 1px solid var(--rule);
+    font-size: .85rem;
+    color: var(--ink-faint);
+  }
+
+  @media print {
+    body { background: #fff; }
+    .wrap { padding: 0; max-width: none; }
+  }
+</style>
+
+<div class="wrap">
+  <header>
+    <p class="eyebrow">Instrukcja dla administratora konta</p>
+    <h1>Dostęp SP-API dla AdsPanel</h1>
+    <p class="lede">
+      Druga, osobna integracja — obok tej, którą już nadaliście do Amazon Ads.
+      Ta służy wyłącznie do pobrania raportu sprzedaży, żeby dało się policzyć
+      TACOS. Wymaga uprawnień właściciela konta, dlatego trafia do Ciebie,
+      a nie do użytkownika subkonta.
+    </p>
+  </header>
+
+  <h2>Dlaczego to osobna sprawa</h2>
+
+  <p>
+    Amazon Ads API, który już mamy, zna wyłącznie sprzedaż przypisaną do reklam.
+    Sprzedaży organicznej nie zna wcale — sprawdziliśmy wszystkie kolumny
+    wszystkich raportów. Bez niej nie da się policzyć TACOS, czyli stosunku
+    wydatków na reklamę do <em>całego</em> przychodu.
+  </p>
+
+  <p>
+    Tę brakującą część daje Selling Partner API. To odrębne API, z odrębną
+    rejestracją i odrębnymi kluczami — istniejącej aplikacji reklamowej nie da
+    się do tego użyć.
+  </p>
+
+  <div class="note">
+    <strong>Potrzebna jest jedna rola: Brand Analytics.</strong> Nie prosimy
+    o żadne dane osobowe klientów ani o role ograniczone (PII). To istotnie
+    skraca procedurę — odpada ankieta bezpieczeństwa i cała ścieżka wokół
+    danych wrażliwych.
+  </div>
+
+  <h2>Co trzeba zrobić</h2>
+
+  <ol class="steps">
+    <li>
+      <p class="step-title">Otwórz rejestrację dewelopera</p>
+      <p>W Seller Central, na koncie głównym:</p>
+      <div class="path">Apps and Services → Develop Apps</div>
+      <p>
+        Jeśli konto zostało już przeniesione do Solution Provider Portal,
+        ta sama strona jest dostępna stamtąd.
+      </p>
+    </li>
+
+    <li>
+      <p class="step-title">Wypełnij profil dewelopera</p>
+      <p>W sekcji <strong>Data Access</strong> wybierz opcję dla integracji własnej firmy:</p>
+      <div class="path">Private Developer: I build application(s) that integrate my own company with Amazon Services APIs</div>
+      <p>W sekcji <strong>Roles</strong> zaznacz wyłącznie:</p>
+      <div class="path">Brand Analytics</div>
+      <p>
+        Nie zaznaczaj ról oznaczonych jako restricted ani niczego związanego
+        z danymi kupujących — nie są nam potrzebne, a wydłużają weryfikację.
+      </p>
+    </li>
+
+    <li>
+      <p class="step-title">Wklej opis zastosowania i zabezpieczeń</p>
+      <p>
+        Formularz pyta o <strong>Use Cases</strong> i <strong>Security Controls</strong>.
+        Amazon to czyta i potrafi dopytać, więc poniżej gotowe teksty opisujące
+        stan faktyczny. Formularz jest po angielsku.
+      </p>
+
+      <div class="paste">
+        <div class="paste-head">Use case — do wklejenia</div>
+        <div class="paste-body">
+          <p>
+            Internal tool used solely by our own organization to manage our own
+            Amazon Advertising campaigns. The application retrieves the Sales and
+            Traffic report (GET_SALES_AND_TRAFFIC_REPORT) via the Reports API in
+            order to calculate TACOS (Total Advertising Cost of Sale), which
+            compares advertising spend against total revenue including organic
+            sales.
+          </p>
+          <p>
+            The data is aggregated sales and traffic per day and per ASIN. It is
+            used only for internal advertising decisions, is not resold, not
+            shared with any third party, and not used for any purpose other than
+            reporting inside our own company. No personally identifiable
+            information is requested, retrieved, stored or processed.
+          </p>
+        </div>
+      </div>
+
+      <div class="paste">
+        <div class="paste-head">Security controls — do wklejenia</div>
+        <div class="paste-body">
+          <p>
+            Data is stored on a dedicated server under our own control (Debian
+            Linux, Docker). The PostgreSQL database is bound to localhost only and
+            is not reachable from the internet. The application is served over
+            HTTPS and protected by password authentication; only named employees
+            of our company have access.
+          </p>
+          <p>
+            API credentials and refresh tokens are stored in a configuration file
+            with 0600 file permissions, outside of version control, and are never
+            written to logs or transmitted in URLs. Access is read-only: the
+            application only downloads reports and performs no write operations
+            through SP-API. Encrypted daily backups of the database are retained
+            on the same server.
+          </p>
+        </div>
+      </div>
+    </li>
+
+    <li>
+      <p class="step-title">Wyślij i pilnuj skrzynki</p>
+      <p>
+        Po kliknięciu <strong>Register</strong> Amazon zakłada sprawę i odpisuje
+        na adres administratora konta.
+      </p>
+      <div class="warn">
+        <strong>Pięć dni na odpowiedź.</strong> Jeśli Amazon poprosi o dodatkowe
+        wyjaśnienia, a odpowiedź nie przyjdzie w ciągu pięciu dni, sprawa zostaje
+        zamknięta i trzeba zaczynać od nowa. Warto sprawdzać skrzynkę, także
+        folder ze spamem.
+      </div>
+    </li>
+
+    <li>
+      <p class="step-title">Utwórz aplikację prywatną</p>
+      <p>
+        Po zatwierdzeniu profilu, na tej samej stronie <em>Develop Apps</em>,
+        dodaj nową aplikację typu <strong>SP-API</strong>. Po utworzeniu
+        aplikacja ma własne <strong>LWA credentials</strong> — client ID
+        i client secret.
+      </p>
+    </li>
+
+    <li>
+      <p class="step-title">Autoryzuj ją na własnym koncie</p>
+      <p>
+        Przy aplikacji na liście kliknij <strong>Authorize app</strong>.
+        Amazon wygeneruje <strong>refresh token</strong> i pokaże go na ekranie.
+      </p>
+      <div class="warn">
+        <strong>Token pokazuje się raz.</strong> Skopiuj go od razu. Gdyby
+        przepadł, nic złego się nie stanie — wystarczy kliknąć
+        <em>Authorize app</em> ponownie, a poprzednie tokeny pozostają ważne.
+      </div>
+    </li>
+  </ol>
+
+  <h2>Do odesłania</h2>
+
+  <p>Trzy wartości — ten sam komplet co przy dostępie do Ads API:</p>
+
+  <div class="send">
+    <div class="field"><span>LWA client ID</span><span>zaczyna się od amzn1.application-oa2-client.</span></div>
+    <div class="field"><span>LWA client secret</span><span>zaczyna się od amzn1.oa2-cs.v1.</span></div>
+    <div class="field"><span>refresh token</span><span>zaczyna się od Atzr|</span></div>
+  </div>
+
+  <div class="warn">
+    <strong>Nie mailem i nie komunikatorem.</strong> Te trzy wartości dają pełny
+    dostęp do raportów konta. Najlepiej przekazać je osobiście albo menedżerem
+    haseł. Gdyby kiedykolwiek wyciekły, autoryzację można cofnąć w tym samym
+    miejscu, w którym się ją nadaje.
+  </div>
+
+  <h2>Czego <em>nie</em> trzeba robić</h2>
+
+  <div class="scroll">
+    <table>
+      <thead>
+        <tr><th>Rzecz</th><th>Dlaczego odpada</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>konto AWS</td>
+          <td>Amazon zniósł ten wymóg w październiku 2023.</td>
+        </tr>
+        <tr>
+          <td>rola IAM</td>
+          <td>Nie jest już potrzebna do żadnego wywołania SP-API.</td>
+        </tr>
+        <tr>
+          <td>podpisy SigV4</td>
+          <td>Wystarczy zwykły token LWA, tak jak w Ads API.</td>
+        </tr>
+        <tr>
+          <td>publikacja aplikacji</td>
+          <td>Aplikacja prywatna działa tylko na własnym koncie, nie trafia do katalogu.</td>
+        </tr>
+        <tr>
+          <td>role PII</td>
+          <td>Nie pobieramy danych kupujących, więc nie prosimy o te uprawnienia.</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h2>Co to oznacza dla konta</h2>
+
+  <ul class="plain">
+    <li><strong>Tylko odczyt.</strong> Integracja pobiera raporty i nic nie zapisuje przez SP-API.</li>
+    <li><strong>Jeden raport.</strong> Sales and Traffic — dzienna sprzedaż i ruch, zbiorczo oraz per ASIN.</li>
+    <li><strong>Bez danych osobowych.</strong> Nie prosimy o nazwiska, adresy ani dane zamówień kupujących.</li>
+    <li><strong>Odwracalne.</strong> Autoryzację można wycofać w każdej chwili w Seller Central.</li>
+    <li><strong>Niezależne od Ads API.</strong> Cofnięcie jednego nie rusza drugiego.</li>
+  </ul>
+
+  <footer>
+    Dokument roboczy dla administratora konta Quest. Pytania techniczne —
+    do osoby prowadzącej AdsPanel.
+  </footer>
+</div>

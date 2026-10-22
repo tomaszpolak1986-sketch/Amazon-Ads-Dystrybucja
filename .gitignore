@@ -1,0 +1,35 @@
+# --- sekrety ---
+# .env zawiera client secret Amazona i skrot hasla do panelu.
+# Nigdy nie moze trafic do repozytorium.
+.env
+.env.*
+!.env.example
+
+# --- srodowiska i zaleznosci ---
+.venv/
+__pycache__/
+*.py[cod]
+node_modules/
+
+# --- dane i artefakty ---
+# Baza to lokalna kopia danych z Amazona - odtwarzalna przez sync,
+# a przy tym duza i zmieniajaca sie co noc. Nie wersjonujemy jej.
+data/
+*.db
+*.db-wal
+*.db-shm
+*.sqlite3
+*.log
+
+# --- buildy ---
+.next/
+out/
+dist/
+build/
+*.tsbuildinfo
+
+# --- narzedzia i system ---
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

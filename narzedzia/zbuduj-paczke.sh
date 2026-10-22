@@ -19,7 +19,18 @@ SLUG=$(slug "$KLIENT")
 CEL="/d/Claude Projekty/AdsPanel-Paczki/$SLUG-$WERSJA"
 
 wymagaj_czystego_repo
-zbuduj_obrazy "$WERSJA"
+# Wersja juz wydana do magazynu (wydaj.sh) - bierzemy DOKLADNIE te obrazy.
+# Ponowne budowanie daje te sama zawartosc, ale inne identyfikatory, a wtedy
+# pierwsza nocna aktualizacja u klienta uznalaby wersje z magazynu za nowa
+# (sprawdzone na tescie 1.1.0).
+if docker pull -q "$REJESTR/adspanel-api:$WERSJA" >/dev/null 2>&1 \
+   && docker pull -q "$REJESTR/adspanel-web:$WERSJA" >/dev/null 2>&1; then
+    echo "== Obrazy $WERSJA z magazynu (wersja juz wydana)"
+    docker tag "$REJESTR/adspanel-api:$WERSJA" "adspanel-api:$WERSJA"
+    docker tag "$REJESTR/adspanel-web:$WERSJA" "adspanel-web:$WERSJA"
+else
+    zbuduj_obrazy "$WERSJA"
+fi
 docker pull -q postgres:17-alpine
 
 echo "== Licencja: $KLIENT do $DO"

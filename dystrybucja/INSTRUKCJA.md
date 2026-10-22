@@ -57,31 +57,31 @@ panelu.
 sudo docker compose exec api adspanel setpassword
 ```
 
-**c) Klucze Amazon Ads.** Wpisz w `adspanel.env` wartości `ADS_CLIENT_ID`
-i `ADS_CLIENT_SECRET`. Następnie wygeneruj token:
+**c) Klucze Amazon (Ads API i SP-API).** Po zalogowaniu do panelu wejdź
+w **Ustawienia** w menu po lewej. Osoba z firmy, która ma dostęp do konta
+Amazon, może to zrobić sama, bez dostępu do serwera:
+
+1. **Amazon Ads API:** wpisz Client ID i Client Secret, a potem kliknij
+   **Zapisz i sprawdź klucze**. Panel od razu sprawdzi je w Amazonie.
+2. Kliknij **Połącz z Amazonem**, zaloguj się na konto z dostępem do reklam
+   i kliknij **Allow**. Wklej do panelu adres z paska przeglądarki (strona
+   pokaże błąd połączenia z `localhost`, to normalne).
+3. **SP-API (opcjonalnie, sprzedaż całkowita / TACOS):** Client ID, Client
+   Secret i Refresh Token z Seller Central, a potem **Zapisz i sprawdź**.
+
+Panel zapisuje klucze w `adspanel.env` i stosuje je od razu, bez restartu.
+
+Wariant z terminala (zapasowy): wpisz klucze w `adspanel.env`, potem
+`sudo docker compose exec api adspanel autoryzacja url`, otwórz link,
+zaloguj się, a skopiowany adres przekaż do
+`sudo docker compose exec api adspanel autoryzacja token --code "<adres>"`
+i uruchom `sudo docker compose restart api`.
+
+**d) Pierwsze dane.** Zaraz po pierwszym połączeniu panel sam zaczyna
+pobierać dane z ostatnich 30 dni. Ręcznie: przycisk **Sync** u góry panelu
+albo:
 
 ```bash
-sudo docker compose exec api adspanel autoryzacja url
-```
-
-Otwórz wyświetlony adres w przeglądarce na dowolnym komputerze, zaloguj się na
-konto Amazon z dostępem do reklam firmy i kliknij **Allow**. Przeglądarka
-pokaże błąd połączenia z `localhost` – to normalne. Skopiuj **cały adres
-z paska** i w ciągu 5 minut uruchom:
-
-```bash
-sudo docker compose exec api adspanel autoryzacja token --code "<wklejony adres>"
-```
-
-**d) Klucze SP-API (opcjonalnie)** – `SP_CLIENT_ID`, `SP_CLIENT_SECRET`,
-`SP_REFRESH_TOKEN` w `adspanel.env`. Dają sprzedaż całkowitą (TACOS).
-
-**e) Zastosowanie zmian i pierwsze dane:**
-
-```bash
-sudo docker compose restart api
-sudo docker compose exec api adspanel health
-sudo docker compose exec api adspanel profiles
 sudo docker compose exec api adspanel sync --lookback 30
 ```
 

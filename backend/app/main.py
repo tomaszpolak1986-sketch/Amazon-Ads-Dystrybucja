@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 
 from . import auth, licencja
 from ._wydanie import WERSJA, WYMAGA_LICENCJI
-from .api import actions, anomalies, effectiveness, queries
+from .api import actions, anomalies, effectiveness, konto_amazon, queries
 from .config import settings
 from .db import get_session, init_db
 from .etl import sync, sync_lock
@@ -571,6 +571,10 @@ async def guard(request: Request, call_next):
         return await call_next(request)
 
     return JSONResponse({"detail": "Wymagane zalogowanie"}, status_code=401)
+
+
+# Ustawienia -> Konto Amazon. Chronione tym samym guardem co reszta /api.
+app.include_router(konto_amazon.router)
 
 
 # CORS musi byc zarejestrowany PO guard: Starlette wstawia kazde kolejne

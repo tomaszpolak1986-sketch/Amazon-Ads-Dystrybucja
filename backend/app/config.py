@@ -36,6 +36,10 @@ class Settings(BaseSettings):
     ads_client_secret: str = ""
     ads_refresh_token: str = ""
     ads_region: str = "EU"
+    # Adres zwrotny przy laczeniu konta (Allowed Return URLs w Security
+    # Profile). localhost, bo Amazon przyjmuje http wylacznie dla localhost -
+    # a panel w sieci firmowej chodzi po http. Kod z paska wkleja sie w panelu.
+    ads_redirect_uri: str = "http://localhost:9090/redirect"
 
     # --- Selling Partner API (sprzedaz calkowita do TACOS) ---
     # Osobna aplikacja niz reklamowa: inne klucze, inna rejestracja. Ads API

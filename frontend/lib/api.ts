@@ -922,6 +922,24 @@ export interface RuleRunResult {
 /* Klient                                                              */
 /* ------------------------------------------------------------------ */
 
+export type KontoAmazon = {
+  ads: {
+    client_id: string | null;
+    client_secret: string | null;
+    polaczone: boolean;
+    region: string;
+    redirect_uri: string;
+    profile: { kraj: string | null; konto: string | null }[];
+  };
+  sp: {
+    client_id: string | null;
+    client_secret: string | null;
+    refresh_token: string | null;
+    region: string;
+  };
+  test?: { ok: boolean; opis: string };
+};
+
 export class ApiError extends Error {
   constructor(
     public status: number,
@@ -1013,6 +1031,15 @@ export const api = {
 
   // --- dostep do panelu ---
   me: () => apiGet<AuthState>("/api/auth/me"),
+  kontoAmazon: () => apiGet<KontoAmazon>("/api/ustawienia/amazon"),
+  zapiszAds: (body: { client_id: string; client_secret: string; region: string; redirect_uri: string }) =>
+    apiPut<KontoAmazon>("/api/ustawienia/amazon/ads", body),
+  linkAds: () => apiGet<{ url: string }>("/api/ustawienia/amazon/ads/link"),
+  polaczAds: (adres: string) => apiPost<KontoAmazon>("/api/ustawienia/amazon/ads/polacz", { adres }),
+  testAds: () => apiPost<KontoAmazon>("/api/ustawienia/amazon/ads/test", {}),
+  zapiszSp: (body: { client_id: string; client_secret: string; refresh_token: string; region: string }) =>
+    apiPut<KontoAmazon>("/api/ustawienia/amazon/sp", body),
+  testSp: () => apiPost<KontoAmazon>("/api/ustawienia/amazon/sp/test", {}),
   login: (password: string) => apiPost<{ authenticated: boolean }>("/api/auth/login", { password }),
   logout: () => apiPost<{ authenticated: boolean }>("/api/auth/logout", null),
   profiles: () => apiGet<Profile[]>("/api/profiles"),

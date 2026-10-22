@@ -19,6 +19,7 @@ import {
   Package,
   RefreshCw,
   Search,
+  Settings,
   Sun,
   PlusCircle,
   Target,
@@ -48,6 +49,7 @@ const NAV = [
   { href: "/total-sales", label: "Sprzedaż całkowita", icon: Wallet },
   { href: "/changes", label: "Historia zmian", icon: History },
   { href: "/suggestions", label: "Sugestie", icon: Sparkles },
+  { href: "/ustawienia", label: "Ustawienia", icon: Settings },
 ] as const;
 
 function ThemeToggle() {

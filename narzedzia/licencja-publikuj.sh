@@ -18,7 +18,7 @@ printf '%s\n' "$LICENCJA" > "$TMP/licencja.txt"
 printf 'FROM scratch\nCOPY licencja.txt /licencja.txt\n' > "$TMP/Dockerfile"
 docker build -q -t "$REJESTR/adspanel-licencja:$SLUG" "$TMP" >/dev/null
 rm -rf "$TMP"
-docker push -q "$REJESTR/adspanel-licencja:$SLUG"
+wypchnij "$REJESTR/adspanel-licencja:$SLUG"
 
 echo "Opublikowano licencje: $KLIENT do $DO ($REJESTR/adspanel-licencja:$SLUG)."
 echo "Serwer klienta przyjmie ja najblizszej nocy o 3:30."

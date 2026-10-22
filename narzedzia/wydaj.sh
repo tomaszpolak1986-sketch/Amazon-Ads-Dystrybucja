@@ -17,8 +17,8 @@ zbuduj_obrazy "$WERSJA"
 for s in api web; do
     docker tag "adspanel-$s:$WERSJA" "$REJESTR/adspanel-$s:$WERSJA"
     docker tag "adspanel-$s:$WERSJA" "$REJESTR/adspanel-$s:stabilna"
-    docker push -q "$REJESTR/adspanel-$s:$WERSJA"
-    docker push -q "$REJESTR/adspanel-$s:stabilna"
+    wypchnij "$REJESTR/adspanel-$s:$WERSJA"
+    wypchnij "$REJESTR/adspanel-$s:stabilna"
 done
 git -C "$ROOT" tag -a "v$WERSJA" -m "Wydanie $WERSJA" 2>/dev/null || true
 

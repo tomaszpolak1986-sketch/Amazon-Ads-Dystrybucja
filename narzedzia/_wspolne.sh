@@ -38,3 +38,17 @@ zbuduj_obrazy() {
 }
 
 slug() { echo "$1" | tr '[:upper:] ' '[:lower:]-'; }
+
+# docker push z ponowieniem. GHCR potrafi odmowic ("denied") zaraz po
+# utworzeniu nowego pakietu, zanim nada mu uprawnienia - sprawdzone przy
+# pierwszym wydaniu 1.1.0. Po trzech nieudanych probach przerywamy wydanie.
+wypchnij() {
+    local proba
+    for proba in 1 2 3; do
+        docker push -q "$1" && return 0
+        echo "Wysylanie $1 nie powiodlo sie (proba $proba/3) - ponawiam za 20 s"
+        sleep 20
+    done
+    echo "BLAD: nie udalo sie wyslac $1 - wydanie przerwane."
+    exit 1
+}

@@ -11,7 +11,7 @@ serwerze.
 | System | Linux x86-64, np. Ubuntu Server 24.04 LTS lub Debian 12 |
 | Zasoby | 2 vCPU, 4 GB RAM, 40 GB dysku |
 | Oprogramowanie | Docker Engine z wtyczką Compose ([instalacja](https://docs.docker.com/engine/install/)) |
-| Sieć wychodząca | HTTPS (443) do `*.amazon.com`, `*.amazonaws.com` (pliki raportów Amazona), `www.ecb.europa.eu` (kursy walut) |
+| Sieć wychodząca | HTTPS (443) do `*.amazon.com`, `*.amazonaws.com` (pliki raportów Amazona), `www.ecb.europa.eu` (kursy walut), `ghcr.io` i `pkg-containers.githubusercontent.com` (aktualizacje) |
 | Sieć przychodząca | jeden port panelu (domyślnie **8080**) – tylko z sieci firmowej / VPN |
 
 Panel **nie musi** być dostępny z internetu i nie powinien być.
@@ -90,7 +90,29 @@ dociąga dane co 6 godzin.
 
 Panel: `http://<adres-serwera>:8080`
 
-## 5. Aktualizacja
+## 5. Aktualizacje
+
+### Automatyczne (domyślnie, jeśli paczka zawiera plik `rejestr.token`)
+
+Instalator włącza je sam. Codziennie o 3:30 serwer sprawdza, czy dostawca
+wydał nową wersję panelu albo przedłużył licencję. Jeśli tak:
+
+1. robi kopię bazy,
+2. pobiera i uruchamia nową wersję,
+3. sprawdza, czy panel działa. Jeśli nie wstanie w ciągu 3 minut, sam
+   wraca do poprzedniej wersji.
+
+Wymaga połączenia wychodzącego HTTPS do `ghcr.io` i `pkg-containers.githubusercontent.com`.
+Dziennik zmian: `/var/log/adspanel-aktualizacje.log`. Bieżącą wersję widać
+w lewym dolnym rogu panelu.
+
+| Co | Komenda |
+|---|---|
+| Sprawdzenie od razu, bez czekania na noc | `sudo sh aktualizuj-auto.sh` |
+| Wyłączenie aktualizacji automatycznych | `sudo rm /etc/cron.d/adspanel-aktualizacje` |
+| Ponowne włączenie | `echo "30 3 * * * root sh /opt/adspanel/aktualizuj-auto.sh >> /var/log/adspanel-aktualizacje.log 2>&1" \| sudo tee /etc/cron.d/adspanel-aktualizacje` |
+
+### Ręczne, z paczki ZIP
 
 Dostawca przesyła nową paczkę `AdsPanel-<wersja>.zip`. Rozpakuj ją **do tego
 samego katalogu** (nadpisz pliki) i uruchom:
@@ -143,6 +165,8 @@ Przywracaj do pustej bazy, czyli po świeżej instalacji, a nie na działający 
   odczyt.
 - Oprogramowanie jest udostępnione na licencji. Kopiowanie, modyfikowanie
   i dekompilowanie obrazów jest niedozwolone (szczegóły w umowie licencyjnej).
-- Gdy licencja wygaśnie, panel pokaże komunikat. Dane pozostaną nietknięte,
-  a po wpisaniu nowego klucza i `sudo docker compose restart api` panel wróci
-  do działania.
+- Na 14 dni przed końcem licencji panel pokazuje przypomnienie. Przy
+  aktualizacjach automatycznych przedłużenie od dostawcy dociera samo,
+  najbliższej nocy. W trybie ręcznym nowy klucz wpisz w `adspanel.env`
+  (`LICENCJA=`) i uruchom `sudo docker compose restart api`. Po wygaśnięciu
+  licencji panel się blokuje, ale dane pozostają nietknięte.

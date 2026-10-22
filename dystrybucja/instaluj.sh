@@ -31,6 +31,11 @@ if [ -f rejestr.token ]; then
     rm -f rejestr.token
     AUTO=1
 fi
+# Ponowne uruchomienie instalatora (np. po doinstalowaniu crona) nie moze
+# przelaczyc panelu na tryb reczny - token z paczki jest juz wtedy usuniety.
+if [ -f .env ] && grep -q '^WERSJA=stabilna' .env; then
+    AUTO=1
+fi
 
 if [ ! -f .env ]; then
     # Haslo do bazy generujemy tutaj - nikt go nie musi znac ani wpisywac.
@@ -39,20 +44,30 @@ if [ ! -f .env ]; then
         "$WERSJA" "$POSTGRES_PASSWORD" "$KLIENT" "$REJESTR" > .env
     chmod 600 .env
     echo "== Utworzono .env (haslo bazy wygenerowane, port panelu 8080)"
-else
+elif [ "$AUTO" = 0 ]; then
     sed -i "s/^WERSJA=.*/WERSJA=$WERSJA/" .env
 fi
 
 if [ "$AUTO" = 1 ]; then
     # Wczytane obrazy dostaja nazwe z magazynu z etykieta "stabilna" -
-    # od teraz aktualizuj-auto.sh przesuwa ja na kolejne wydania.
-    docker tag "adspanel-api:$WERSJA" "$REJESTR/adspanel-api:stabilna"
-    docker tag "adspanel-web:$WERSJA" "$REJESTR/adspanel-web:stabilna"
+    # od teraz aktualizuj-auto.sh przesuwa ja na kolejne wydania. Przy
+    # ponownym uruchomieniu nie cofamy juz pobranej, nowszej wersji.
+    for s in api web; do
+        docker image inspect "$REJESTR/adspanel-$s:stabilna" >/dev/null 2>&1 \
+            || docker tag "adspanel-$s:$WERSJA" "$REJESTR/adspanel-$s:stabilna"
+    done
     sed -i '/^WERSJA=/d; /^OBRAZ_API=/d; /^OBRAZ_WEB=/d' .env
     printf 'WERSJA=stabilna\nOBRAZ_API=%s/adspanel-api\nOBRAZ_WEB=%s/adspanel-web\n' "$REJESTR" "$REJESTR" >> .env
-    printf '30 3 * * * root sh %s/aktualizuj-auto.sh >> /var/log/adspanel-aktualizacje.log 2>&1\n' "$(pwd)" \
-        > /etc/cron.d/adspanel-aktualizacje
-    echo "== Aktualizacje automatyczne wlaczone (codziennie o 3:30, log: /var/log/adspanel-aktualizacje.log)"
+    if [ -d /etc/cron.d ]; then
+        printf '30 3 * * * root sh %s/aktualizuj-auto.sh >> /var/log/adspanel-aktualizacje.log 2>&1\n' "$(pwd)" \
+            > /etc/cron.d/adspanel-aktualizacje
+        echo "== Aktualizacje automatyczne wlaczone (codziennie o 3:30, log: /var/log/adspanel-aktualizacje.log)"
+    else
+        # Minimalny Debian bywa bez crona - instalacji nie przerywamy,
+        # ale bez niego nocne aktualizacje sie nie odpala.
+        echo "!! Brak crona (/etc/cron.d) - aktualizacje automatyczne NIE beda sie uruchamiac."
+        echo "!! Doinstaluj: sudo apt install cron   i uruchom ponownie: sudo sh instaluj.sh"
+    fi
 fi
 
 if [ ! -f adspanel.env ]; then

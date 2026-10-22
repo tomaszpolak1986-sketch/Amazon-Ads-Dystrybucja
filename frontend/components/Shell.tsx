@@ -303,6 +303,34 @@ function RangePicker() {
   );
 }
 
+// Ile dni przed koncem licencji panel zaczyna o tym przypominac. Po wygasnieciu
+// blokuje sie od razu, wiec klient ma miec czas, zeby zalatwic przedluzenie.
+const LICENCJA_OSTRZEZENIE_DNI = 14;
+
+function LicencjaBanner() {
+  const licencja = useQuery({
+    queryKey: ["health"],
+    queryFn: () => api.health(),
+    refetchInterval: 6 * 60 * 60_000,
+    select: (h) => h.licencja,
+  }).data;
+
+  if (!licencja?.ok || !licencja.wazna_do) return null;
+  // Dni kalendarzowe: 0 = ostatni dzien licencji (wazna do konca dnia wlacznie)
+  const dzis = new Date();
+  dzis.setHours(0, 0, 0, 0);
+  const dni = Math.round((new Date(`${licencja.wazna_do}T00:00:00`).getTime() - dzis.getTime()) / 86_400_000);
+  if (dni > LICENCJA_OSTRZEZENIE_DNI) return null;
+
+  return (
+    <div className="border-b border-warn/30 bg-warn-soft px-4 py-2 text-xs text-warn">
+      Licencja panelu wygasa {licencja.wazna_do}
+      {dni <= 0 ? " (dziś)" : dni === 1 ? " (jutro)" : ` (za ${dni} dni)`}. Po tym dniu panel zostanie zablokowany, a dane
+      pozostaną nienaruszone. W sprawie przedłużenia skontaktuj się z dostawcą panelu.
+    </div>
+  );
+}
+
 export function Shell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const { profileId, revision } = useFilters();
@@ -360,6 +388,7 @@ export function Shell({ children }: { children: ReactNode }) {
       </aside>
 
       <div className="flex min-w-0 flex-1 flex-col">
+        <LicencjaBanner />
         <header className="sticky top-0 z-20 flex flex-wrap items-center gap-3 border-b border-border bg-bg/85 px-4 py-2.5 backdrop-blur">
           <MarketPicker />
           <RangePicker />

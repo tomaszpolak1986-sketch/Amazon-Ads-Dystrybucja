@@ -1002,7 +1002,13 @@ export interface RangeParams extends Params {
 }
 
 export const api = {
-  health: () => apiGet<{ status: string; credentials_configured: boolean; region: string }>("/api/health"),
+  health: () =>
+    apiGet<{
+      status: string;
+      credentials_configured: boolean;
+      region: string;
+      licencja: { ok: boolean; powod: string; klient: string | null; wazna_do: string | null };
+    }>("/api/health"),
 
   // --- dostep do panelu ---
   me: () => apiGet<AuthState>("/api/auth/me"),

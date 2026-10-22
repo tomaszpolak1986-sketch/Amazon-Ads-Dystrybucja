@@ -19,11 +19,21 @@ echo "== Kopia bazy przed aktualizacja"
 sh kopia.sh
 
 gunzip -c "obrazy-$WERSJA.tar.gz" | docker load
-sed -i "s/^WERSJA=.*/WERSJA=$WERSJA/" .env
+if [ "$STARA" = "stabilna" ]; then
+    # Tryb automatyczny: reczna paczka tylko przesuwa etykiete "stabilna",
+    # zeby nocna aktualizacja nie przelaczyla sie potem na tryb reczny.
+    OBRAZ_API=$(grep '^OBRAZ_API=' .env | cut -d= -f2-)
+    OBRAZ_WEB=$(grep '^OBRAZ_WEB=' .env | cut -d= -f2-)
+    docker tag "adspanel-api:$WERSJA" "$OBRAZ_API:stabilna"
+    docker tag "adspanel-web:$WERSJA" "$OBRAZ_WEB:stabilna"
+    STARA=""
+else
+    sed -i "s/^WERSJA=.*/WERSJA=$WERSJA/" .env
+fi
 docker compose up -d
 
 # Stare obrazy zajmuja po kilkaset MB - zostawiamy tylko biezaca wersje.
-if [ "$STARA" != "$WERSJA" ]; then
+if [ -n "$STARA" ] && [ "$STARA" != "$WERSJA" ]; then
     docker image rm "adspanel-api:$STARA" "adspanel-web:$STARA" 2>/dev/null || true
 fi
 echo "Gotowe - dziala wersja $WERSJA."

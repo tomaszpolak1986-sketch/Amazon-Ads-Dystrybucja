@@ -5,8 +5,9 @@
 # zapytania /api przekazuje on do backendu wewnatrz sieci Dockera.
 #
 # Konfiguracja:
-#   .env          - zmienne dla tego pliku (wersja, port, haslo bazy);
-#                   tworzy je instaluj.sh
+#   .env          - zmienne dla tego pliku (wersja, port, haslo bazy, skad
+#                   pobierac aktualizacje); tworzy je instaluj.sh.
+#                   WERSJA=stabilna oznacza aktualizacje automatyczne.
 #   adspanel.env  - konfiguracja panelu (klucze Amazona, licencja, haslo);
 #                   podmontowana do kontenera, bo komendy `adspanel
 #                   setpassword` i `adspanel autoryzacja` zapisuja do niej
@@ -28,7 +29,7 @@ services:
       retries: 20
 
   api:
-    image: adspanel-api:${WERSJA:?brak WERSJA w .env}
+    image: ${OBRAZ_API:-adspanel-api}:${WERSJA:?brak WERSJA w .env}
     restart: unless-stopped
     environment:
       DATABASE_URL: postgresql+psycopg://panel:${POSTGRES_PASSWORD}@db:5432/adspanel
@@ -40,7 +41,7 @@ services:
       - ./data:/app/data
 
   web:
-    image: adspanel-web:${WERSJA}
+    image: ${OBRAZ_WEB:-adspanel-web}:${WERSJA}
     restart: unless-stopped
     depends_on:
       - api

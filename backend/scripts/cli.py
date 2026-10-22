@@ -73,6 +73,9 @@ def main() -> int:
 
     sub.add_parser("health", help="sprawdza konfiguracje i polaczenie z API")
     sub.add_parser("initdb", help="tworzy schemat bazy")
+
+    p_lic = sub.add_parser("licencja", help="sprawdza klucz licencyjny (bez argumentu: biezacy)")
+    p_lic.add_argument("klucz", nargs="?")
     sub.add_parser("profiles", help="pobiera i zapisuje profile reklamowe")
 
     p_pass = sub.add_parser("setpassword", help="ustawia haslo dostepu do panelu")
@@ -270,6 +273,15 @@ def main() -> int:
             print("Wygenerowano tez AUTH_SECRET (klucz podpisujacy sesje)")
         print("\nZrestartuj backend, zeby zmiana zadzialala.")
         return 0
+
+    if args.command == "licencja":
+        # Uzywane tez przez aktualizuj-auto.sh: nowy klucz z magazynu trafia
+        # do konfiguracji tylko wtedy, gdy ta komenda potwierdzi podpis i date.
+        from app import licencja
+
+        stan = licencja.sprawdz(args.klucz) if args.klucz else licencja.stan()
+        print(json.dumps(stan.jako_slownik(), ensure_ascii=False))
+        return 0 if stan.ok else 1
 
     if args.command == "initdb":
         init_db()

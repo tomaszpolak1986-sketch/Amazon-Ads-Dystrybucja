@@ -307,6 +307,15 @@ function RangePicker() {
 // blokuje sie od razu, wiec klient ma miec czas, zeby zalatwic przedluzenie.
 const LICENCJA_OSTRZEZENIE_DNI = 14;
 
+function WersjaPanelu() {
+  const wersja = useQuery({
+    queryKey: ["health"],
+    queryFn: () => api.health(),
+    select: (h) => h.wersja,
+  }).data;
+  return <>Wersja {wersja ?? "…"}</>;
+}
+
 function LicencjaBanner() {
   const licencja = useQuery({
     queryKey: ["health"],
@@ -383,7 +392,7 @@ export function Shell({ children }: { children: ReactNode }) {
           })}
         </nav>
         <div className="border-t border-border px-3 py-3 text-[11px] text-muted">
-          Faza 2 · dashboard
+          <WersjaPanelu />
         </div>
       </aside>
 

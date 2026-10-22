@@ -6,3 +6,4 @@ stale. Celowo nie jest to zmienna srodowiskowa: te ustawia klient w swoim
 pliku konfiguracyjnym, wiec moglby licencje po prostu wylaczyc.
 """
 WYMAGA_LICENCJI = False
+WERSJA = "dev"

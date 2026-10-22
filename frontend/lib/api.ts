@@ -1005,6 +1005,7 @@ export const api = {
   health: () =>
     apiGet<{
       status: string;
+      wersja: string;
       credentials_configured: boolean;
       region: string;
       licencja: { ok: boolean; powod: string; klient: string | null; wazna_do: string | null };

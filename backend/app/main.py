@@ -17,7 +17,7 @@ from sqlalchemy import delete as sa_delete
 from sqlalchemy.orm import Session
 
 from . import auth, licencja
-from ._wydanie import WYMAGA_LICENCJI
+from ._wydanie import WERSJA, WYMAGA_LICENCJI
 from .api import actions, anomalies, effectiveness, queries
 from .config import settings
 from .db import get_session, init_db
@@ -644,6 +644,7 @@ def _opis_bazy() -> str:
 def health() -> dict[str, Any]:
     return {
         "status": "ok",
+        "wersja": WERSJA,
         "region": settings.ads_region,
         "credentials_configured": settings.is_configured,
         "database": _opis_bazy(),

@@ -24,7 +24,9 @@ RUN pip install -r requirements.txt "nuitka==2.7.*" ordered-set zstandard
 COPY backend/ ./backend/
 
 # Licencja wymagana na stale - wkompilowana, nie do wylaczenia z konfiguracji.
-RUN printf 'WYMAGA_LICENCJI = True\n' > backend/app/_wydanie.py
+# Numer wersji pokazuje panel - po automatycznej aktualizacji widac, co dziala.
+ARG WERSJA=dev
+RUN printf 'WYMAGA_LICENCJI = True\nWERSJA = "%s"\n' "$WERSJA" > backend/app/_wydanie.py
 
 WORKDIR /src/backend
 RUN python -m nuitka --mode=module app --include-package=app \

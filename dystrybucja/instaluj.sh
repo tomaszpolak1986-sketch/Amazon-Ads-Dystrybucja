@@ -1,5 +1,9 @@
 #!/bin/sh
 # AdsPanel - pierwsza instalacja. Uruchomienie: sudo sh instaluj.sh
+#
+# Jesli w katalogu jest plik rejestr.token, panel instaluje sie z wlaczonymi
+# aktualizacjami automatycznymi (nowe wersje i przedluzenia licencji pobiera
+# sam, raz na dobe). Bez niego - aktualizacje reczne z paczek ZIP.
 set -eu
 cd "$(dirname "$0")"
 
@@ -13,17 +17,42 @@ if ! docker compose version >/dev/null 2>&1; then
 fi
 
 WERSJA=$(cat WERSJA)
+KLIENT=$(cat KLIENT)
+REJESTR=$(cat REJESTR)
 echo "== Wczytuje obrazy AdsPanel $WERSJA (kilka minut)"
 gunzip -c "obrazy-$WERSJA.tar.gz" | docker load
+
+AUTO=0
+if [ -f rejestr.token ]; then
+    echo "== Logowanie do magazynu aktualizacji ($REJESTR)"
+    # Token tylko do odczytu. Docker zapisuje go w /root/.docker/config.json
+    # (dostep wylacznie dla roota), wiec plik z paczki nie jest juz potrzebny.
+    tr -d ' \r\n' < rejestr.token | docker login "${REJESTR%%/*}" -u "${REJESTR#*/}" --password-stdin
+    rm -f rejestr.token
+    AUTO=1
+fi
 
 if [ ! -f .env ]; then
     # Haslo do bazy generujemy tutaj - nikt go nie musi znac ani wpisywac.
     POSTGRES_PASSWORD=$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')
-    printf 'WERSJA=%s\nPOSTGRES_PASSWORD=%s\nPANEL_PORT=8080\n' "$WERSJA" "$POSTGRES_PASSWORD" > .env
+    printf 'WERSJA=%s\nPOSTGRES_PASSWORD=%s\nPANEL_PORT=8080\nKLIENT=%s\nREJESTR=%s\n' \
+        "$WERSJA" "$POSTGRES_PASSWORD" "$KLIENT" "$REJESTR" > .env
     chmod 600 .env
     echo "== Utworzono .env (haslo bazy wygenerowane, port panelu 8080)"
 else
     sed -i "s/^WERSJA=.*/WERSJA=$WERSJA/" .env
+fi
+
+if [ "$AUTO" = 1 ]; then
+    # Wczytane obrazy dostaja nazwe z magazynu z etykieta "stabilna" -
+    # od teraz aktualizuj-auto.sh przesuwa ja na kolejne wydania.
+    docker tag "adspanel-api:$WERSJA" "$REJESTR/adspanel-api:stabilna"
+    docker tag "adspanel-web:$WERSJA" "$REJESTR/adspanel-web:stabilna"
+    sed -i '/^WERSJA=/d; /^OBRAZ_API=/d; /^OBRAZ_WEB=/d' .env
+    printf 'WERSJA=stabilna\nOBRAZ_API=%s/adspanel-api\nOBRAZ_WEB=%s/adspanel-web\n' "$REJESTR" "$REJESTR" >> .env
+    printf '30 3 * * * root sh %s/aktualizuj-auto.sh >> /var/log/adspanel-aktualizacje.log 2>&1\n' "$(pwd)" \
+        > /etc/cron.d/adspanel-aktualizacje
+    echo "== Aktualizacje automatyczne wlaczone (codziennie o 3:30, log: /var/log/adspanel-aktualizacje.log)"
 fi
 
 if [ ! -f adspanel.env ]; then

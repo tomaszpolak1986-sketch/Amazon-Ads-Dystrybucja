@@ -20,9 +20,11 @@ for s in api web; do
     wypchnij "$REJESTR/adspanel-$s:$WERSJA"
     wypchnij "$REJESTR/adspanel-$s:stabilna"
 done
-git -C "$ROOT" tag -a "v$WERSJA" -m "Wydanie $WERSJA" 2>/dev/null || true
+# Lekki tag - nie wymaga skonfigurowanej tozsamosci gita (tag -a jej wymaga
+# i po cichu sie nie tworzyl).
+git -C "$ROOT" tag "v$WERSJA" 2>/dev/null || echo "Tag v$WERSJA juz istnieje - pomijam."
 
 echo
 echo "Wydano $WERSJA (commit $(git -C "$ROOT" rev-parse --short HEAD))."
 echo "Klienci z aktualizacjami automatycznymi: najblizszej nocy o 3:30."
-echo "Nie zapomnij: git push --follow-tags (kopia kodu na GitHubie)."
+echo "Kopia kodu na GitHubie: git push origin main --tags"

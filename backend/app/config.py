@@ -105,6 +105,14 @@ class Settings(BaseSettings):
     auth_disabled: bool = False
     # Skad wolno wolac API (frontend). Rozdzielone przecinkami.
     cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
+    # Dokumentacja API (/docs). U klienta wylaczona - opisuje cala strukture
+    # backendu kazdemu, kto trafi na adres, jeszcze przed zalogowaniem.
+    api_docs: bool = True
+
+    # --- licencja ---
+    # Klucz wystawiony przez autora panelu (narzedzia/licencja.py). Wymagany
+    # tylko w obrazie dla klienta - patrz app/_wydanie.py.
+    licencja: str = ""
 
     # --- automatyczne kolejkowanie ---
     # Regula uruchomiona przez scheduler tworzy plan tylko wtedy, gdy laczny

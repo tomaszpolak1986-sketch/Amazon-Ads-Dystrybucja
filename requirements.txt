@@ -11,3 +11,6 @@ itsdangerous>=2.2
 # Sterownik Postgresa - potrzebny dopiero na serwerze; lokalnie panel
 # chodzi na SQLite i ta zaleznosc lezy bezczynnie.
 psycopg[binary]>=3.2
+
+# Podpis klucza licencyjnego (Ed25519) - weryfikacja przy kazdym zapytaniu
+cryptography>=43

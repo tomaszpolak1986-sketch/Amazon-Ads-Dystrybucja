@@ -1,0 +1,51 @@
+# AdsPanel - instalacja u klienta.
+#
+# Trzy kontenery z gotowych obrazow (bez budowania, bez kodu zrodlowego):
+# baza, backend, frontend. Na zewnatrz wystawiony jest WYLACZNIE frontend;
+# zapytania /api przekazuje on do backendu wewnatrz sieci Dockera.
+#
+# Konfiguracja:
+#   .env          - zmienne dla tego pliku (wersja, port, haslo bazy);
+#                   tworzy je instaluj.sh
+#   adspanel.env  - konfiguracja panelu (klucze Amazona, licencja, haslo);
+#                   podmontowana do kontenera, bo komendy `adspanel
+#                   setpassword` i `adspanel autoryzacja` zapisuja do niej
+
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: adspanel
+      POSTGRES_USER: panel
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?brak POSTGRES_PASSWORD w .env - uruchom instaluj.sh}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U panel -d adspanel"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  api:
+    image: adspanel-api:${WERSJA:?brak WERSJA w .env}
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+psycopg://panel:${POSTGRES_PASSWORD}@db:5432/adspanel
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ./adspanel.env:/app/.env
+      - ./data:/app/data
+
+  web:
+    image: adspanel-web:${WERSJA}
+    restart: unless-stopped
+    depends_on:
+      - api
+    ports:
+      - "${PANEL_PORT:-8080}:3000"
+
+volumes:
+  pgdata:

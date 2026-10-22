@@ -8,3 +8,6 @@ frontend/.next
 *.pyc
 .env
 *.log
+narzedzia
+dystrybucja
+*.pem

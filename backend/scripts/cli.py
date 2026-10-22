@@ -245,10 +245,15 @@ def main() -> int:
 
         env_path = PROJECT_ROOT / ".env"
         lines = env_path.read_text(encoding="utf-8").splitlines()
-        existing = {ln.split("=", 1)[0].strip() for ln in lines if "=" in ln}
+        existing = {
+            ln.split("=", 1)[0].strip(): ln.split("=", 1)[1].strip()
+            for ln in lines if "=" in ln and not ln.lstrip().startswith("#")
+        }
 
         updates = {"AUTH_PASSWORD_HASH": hash_password(password)}
-        if "AUTH_SECRET" not in existing:
+        # Pusta linia `AUTH_SECRET=` (wzor konfiguracji) to tez brak sekretu -
+        # bez niego auth_ready zostaje False i logowanie odrzuca kazde haslo.
+        if not existing.get("AUTH_SECRET"):
             updates["AUTH_SECRET"] = generate_secret()
 
         for key, value in updates.items():

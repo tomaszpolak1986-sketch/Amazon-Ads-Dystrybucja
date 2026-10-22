@@ -1,0 +1,80 @@
+# Backend w wersji dla klienta: bez kodu zrodlowego.
+#
+# Nuitka tlumaczy pakiet `app` i skrypty CLI na C i kompiluje je do modulow
+# rozszerzen (.so). Obraz koncowy nie zawiera ani jednego pliku .py panelu -
+# tylko biblioteki z pip i skompilowane moduly. Zwykly obraz (Dockerfile)
+# zostaje do wlasnych wdrozen.
+#
+# Tryb `module`, a nie `standalone`: zaleznosci (FastAPI, SQLAlchemy, psycopg)
+# zostaja zwyklymi pakietami z pip. Standalone musialby je wszystkie wciagnac
+# do jednej binarki, a dynamiczne importy uvicorna i sterownikow bazy lubia
+# sie przy tym gubic.
+
+FROM python:3.12-slim AS build
+
+ENV PIP_NO_CACHE_DIR=1
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends gcc libc6-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+COPY requirements.txt .
+RUN pip install -r requirements.txt "nuitka==2.7.*" ordered-set zstandard
+
+COPY backend/ ./backend/
+
+# Licencja wymagana na stale - wkompilowana, nie do wylaczenia z konfiguracji.
+RUN printf 'WYMAGA_LICENCJI = True\n' > backend/app/_wydanie.py
+
+WORKDIR /src/backend
+RUN python -m nuitka --mode=module app --include-package=app \
+        --output-dir=/out --remove-output --no-pyi-file --assume-yes-for-downloads \
+    && python -m nuitka --mode=module scripts/cli.py \
+        --output-dir=/out/scripts --remove-output --no-pyi-file --assume-yes-for-downloads \
+    && python -m nuitka --mode=module scripts/authorize.py \
+        --output-dir=/out/scripts --remove-output --no-pyi-file --assume-yes-for-downloads
+
+
+FROM python:3.12-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1
+
+WORKDIR /app
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libpq5 curl \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt .
+RUN pip install -r requirements.txt && rm requirements.txt
+
+# Wylacznie skompilowane moduly. Sciezki odtwarzaja uklad zrodel, bo kod
+# liczy PROJECT_ROOT od wlasnego __file__ (/app/backend/app/config.py -> /app).
+COPY --from=build /out/app.*.so ./backend/
+COPY --from=build /out/scripts/*.so ./backend/scripts/
+
+# `adspanel <komenda>` zamiast `python backend/scripts/cli.py` - plikow .py
+# juz nie ma. Skompilowany modul zaimportowany nie odpala bloku __main__,
+# wiec main() wolamy jawnie.
+RUN printf '%s\n' \
+      '#!/bin/sh' \
+      'cd /app' \
+      'if [ "$1" = "autoryzacja" ]; then shift; MOD=authorize; else MOD=cli; fi' \
+      'exec python -c "import sys; sys.path[:0]=[\"/app/backend/scripts\",\"/app/backend\"]; m=__import__(\"$MOD\"); sys.argv=[\"adspanel\"]+sys.argv[1:]; sys.exit(m.main())" "$@"' \
+      > /usr/local/bin/adspanel \
+    && chmod 755 /usr/local/bin/adspanel
+
+RUN useradd --create-home --uid 10001 panel \
+    && mkdir -p /app/data \
+    && chown -R panel:panel /app
+USER panel
+
+EXPOSE 8000
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+    CMD curl -fsS http://127.0.0.1:8000/api/health || exit 1
+
+CMD ["python", "-m", "uvicorn", "app.main:app", \
+     "--app-dir", "backend", "--host", "0.0.0.0", "--port", "8000"]

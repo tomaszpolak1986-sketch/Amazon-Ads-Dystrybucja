@@ -16,7 +16,8 @@ from sqlalchemy import desc, select
 from sqlalchemy import delete as sa_delete
 from sqlalchemy.orm import Session
 
-from . import auth
+from . import auth, licencja
+from ._wydanie import WYMAGA_LICENCJI
 from .api import actions, anomalies, effectiveness, queries
 from .config import settings
 from .db import get_session, init_db
@@ -375,6 +376,12 @@ def _opis_luk(luki_reklam: dict, luki_sprzedazy: dict) -> str:
     return " | LUKI - " + ", ".join(czesci) if czesci else ""
 
 
+def _stan_licencji() -> licencja.Stan:
+    if not WYMAGA_LICENCJI:
+        return licencja.Stan(True, "Wersja bez licencji.")
+    return licencja.stan()
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     init_db()
@@ -396,7 +403,28 @@ async def lifespan(_: FastAPI):
             "Ustaw je: python backend/scripts/cli.py setpassword"
         )
 
+    stan_licencji = _stan_licencji()
+    if not stan_licencji.ok:
+        # API i tak odrzuci kazde zapytanie (guard), ale pobieranie w tle
+        # chodziloby dalej i zuzywalo limity Amazona - wiec nie startujemy go.
+        log.error("%s Panel zablokowany, harmonogram nie wystartuje.", stan_licencji.powod)
+        yield
+        return
+    if WYMAGA_LICENCJI:
+        log.info("Licencja: %s, wazna do %s", stan_licencji.klient, stan_licencji.wazna_do)
+
     scheduler = BackgroundScheduler(timezone=settings.tz)
+
+    def _pilnuj_licencji() -> None:
+        # Kontener chodzi miesiacami bez restartu - licencja wygasa w trakcie.
+        if not _stan_licencji().ok:
+            log.error("Licencja wygasla - wstrzymuje harmonogram.")
+            scheduler.pause()
+
+    scheduler.add_job(
+        _pilnuj_licencji, "interval", hours=1,
+        id="licencja", max_instances=1, coalesce=True,
+    )
     scheduler.add_job(
         _scheduled_rules_tick, "interval", minutes=30,
         id="rules", max_instances=1, coalesce=True,
@@ -504,6 +532,9 @@ app = FastAPI(
     version="0.1.0",
     description="Panel kampanii Amazon Ads",
     lifespan=lifespan,
+    docs_url="/docs" if settings.api_docs else None,
+    redoc_url="/redoc" if settings.api_docs else None,
+    openapi_url="/openapi.json" if settings.api_docs else None,
 )
 
 @app.middleware("http")
@@ -515,6 +546,21 @@ async def guard(request: Request, call_next):
     latwo zapomniec dopisac Depends, a zapomniana trasa zapisu to otwarte konto.
     """
     path = request.url.path
+    if (
+        WYMAGA_LICENCJI
+        and request.method != "OPTIONS"
+        and path.startswith("/api")
+        and path != "/api/health"
+    ):
+        stan_licencji = licencja.stan()
+        if not stan_licencji.ok:
+            # 403, nie 401: frontend po 403 pokazuje ekran licencji zamiast
+            # logowania, ktore i tak nic by nie dalo.
+            return JSONResponse(
+                {"detail": stan_licencji.powod, "licencja": stan_licencji.jako_slownik()},
+                status_code=403,
+            )
+
     if (
         request.method == "OPTIONS"          # preflight CORS musi przejsc
         or not path.startswith("/api")
@@ -601,6 +647,7 @@ def health() -> dict[str, Any]:
         "region": settings.ads_region,
         "credentials_configured": settings.is_configured,
         "database": _opis_bazy(),
+        "licencja": _stan_licencji().jako_slownik(),
     }
 
 

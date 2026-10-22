@@ -3,7 +3,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { KeyRound, Loader2, ShieldCheck } from "lucide-react";
 import { useState, type ReactNode } from "react";
-import { api } from "@/lib/api";
+import { api, ApiError } from "@/lib/api";
 import { Button } from "./ui";
 
 /**
@@ -47,6 +47,23 @@ export function AuthGate({ children }: { children: ReactNode }) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-bg">
         <Loader2 className="size-5 animate-spin text-muted" />
+      </div>
+    );
+  }
+
+  // 403 na /api/auth/me oznacza wylacznie brak waznej licencji - logowanie
+  // nic by tu nie zmienilo, wiec mowimy wprost, do kogo sie zwrocic.
+  if (me.isError && me.error instanceof ApiError && me.error.status === 403) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-bg p-6">
+        <div className="w-full max-w-md rounded-xl border border-warn/30 bg-warn-soft p-5">
+          <p className="text-sm font-medium text-warn">Licencja panelu jest nieaktywna</p>
+          <p className="mt-1 text-xs text-muted">{opisLicencji(me.error.message)}</p>
+          <p className="mt-3 text-xs text-muted">
+            Dane pozostają nienaruszone. Po wpisaniu nowego klucza licencyjnego panel wróci do
+            działania bez utraty historii. W sprawie przedłużenia skontaktuj się z dostawcą panelu.
+          </p>
+        </div>
       </div>
     );
   }
@@ -141,4 +158,16 @@ export function AuthGate({ children }: { children: ReactNode }) {
       </div>
     </div>
   );
+}
+
+/** Komunikat z backendu (`403 {"detail": ...}`) w postaci do pokazania. */
+function opisLicencji(message: string): string {
+  try {
+    const body = JSON.parse(message.slice(message.indexOf("{")));
+    const wazna = body?.licencja?.wazna_do as string | undefined;
+    if (wazna) return `Licencja była ważna do ${wazna}.`;
+  } catch {
+    // tresc ucieta albo nie-JSON - zostaje opis ogolny
+  }
+  return "Brak ważnego klucza licencyjnego.";
 }

@@ -930,6 +930,7 @@ export type KontoAmazon = {
     region: string;
     redirect_uri: string;
     profile: { kraj: string | null; konto: string | null }[];
+    konta: string[];
   };
   sp: {
     client_id: string | null;

@@ -4,6 +4,9 @@
 #
 #   bash narzedzia/zbuduj-paczke.sh <wersja> "<klient>" <licencja-do RRRR-MM-DD>
 #   bash narzedzia/zbuduj-paczke.sh 1.0.0 "Murando" 2027-01-31
+#   bash narzedzia/zbuduj-paczke.sh 1.0.0 "Murando" 2027-01-31 A1B2C3D4E5F6G7
+#
+# Czwarty argument (opcjonalny): ID kont Amazon klienta po przecinku.
 #
 # Jesli w folderze z kluczami lezy ghcr-odczyt.txt (token GitHub tylko do
 # odczytu), paczka instaluje panel z aktualizacjami automatycznymi.
@@ -16,6 +19,8 @@ WERSJA=${1:?podaj wersje, np. 1.0.0}
 KLIENT=${2:?podaj nazwe klienta}
 DO=${3:?podaj date waznosci licencji RRRR-MM-DD}
 SLUG=$(slug "$KLIENT")
+KONTA_ARG=()
+IFS=',' read -ra _K <<< "${4:-}"; for k in "${_K[@]}"; do [ -n "$k" ] && KONTA_ARG+=(--konto "$k"); done
 CEL="/d/Claude Projekty/AdsPanel-Paczki/$SLUG-$WERSJA"
 
 wymagaj_czystego_repo
@@ -34,7 +39,7 @@ fi
 docker pull -q postgres:17-alpine
 
 echo "== Licencja: $KLIENT do $DO"
-LICENCJA=$("$PY" "$ROOT/narzedzia/licencja.py" wydaj --klient "$KLIENT" --do "$DO" | grep '^LICENCJA=' | cut -d= -f2-)
+LICENCJA=$("$PY" "$ROOT/narzedzia/licencja.py" wydaj --klient "$KLIENT" --do "$DO" "${KONTA_ARG[@]}" | grep '^LICENCJA=' | cut -d= -f2-)
 [ -n "$LICENCJA" ] || { echo "Nie udalo sie wystawic licencji"; exit 1; }
 # Ta sama licencja w magazynie - aktualizacje automatyczne jej nie podmienia
 publikuj_licencje "$SLUG" "$LICENCJA"

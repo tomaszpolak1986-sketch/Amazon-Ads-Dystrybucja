@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 from ..ads import entities, reports
 from ..api import targeting_names
 from ..ads.client import AdsClient, list_profiles
+from .. import licencja
 from ..db import session_scope
 from ..timeutil import utcnow
 from .zapis import wstaw_lub_zastap
@@ -275,11 +276,31 @@ def sync_profiles() -> list[dict[str, Any]]:
             }
         )
 
+    # Licencja przypieta do kont klienta: profile innych firm nie wchodza do
+    # bazy. To jedyne miejsce, ktorym profile trafiaja do panelu, a wszystkie
+    # pozostale dane (kampanie, sprzedaz, oferty) sa do nich przypisane - wiec
+    # bez profilu nic dla obcego konta sie nie pobierze.
+    dozwolone = licencja.dozwolone_konta()
+    if dozwolone is not None:
+        obce = sorted({str(r["entity_id"]) for r in rows if str(r["entity_id"]) not in dozwolone})
+        rows = [r for r in rows if str(r["entity_id"]) in dozwolone]
+        if obce:
+            log.warning("Pominieto profile kont spoza licencji: %s", ", ".join(obce))
+        if not rows:
+            raise KontoSpozaLicencji(
+                "Licencja tego panelu obejmuje inne konto Amazon niż połączone. "
+                "Połącz konto reklamowe firmy, dla której wydano licencję."
+            )
+
     with session_scope() as session:
         _upsert(session, Profile, rows, "profile_id")
 
     log.info("Zsynchronizowano %s profili", len(rows))
     return rows
+
+
+class KontoSpozaLicencji(RuntimeError):
+    pass
 
 
 # --------------------------------------------------------------------------- #

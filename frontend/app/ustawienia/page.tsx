@@ -517,6 +517,11 @@ function AdsKarta({ stan }: { stan: KontoAmazon }) {
               </div>
             </>
           )}
+          {ads.konta.length > 0 && (
+            <p className="text-xs text-muted">
+              ID konta Amazon: <span className="font-mono text-text">{ads.konta.join(", ")}</span>
+            </p>
+          )}
           {ads.profile.length > 0 && (
             <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted">
               Profile reklamowe:

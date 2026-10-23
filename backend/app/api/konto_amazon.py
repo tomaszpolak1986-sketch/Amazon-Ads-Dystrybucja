@@ -126,6 +126,11 @@ def _profile() -> list[dict[str, Any]]:
     return [{"kraj": k, "konto": n} for k, n in sorted(wiersze, key=lambda w: w[0] or "")]
 
 
+def _konta() -> list[str]:
+    with session_scope() as s:
+        return sorted({e for (e,) in s.execute(select(Profile.entity_id)).all() if e})
+
+
 # --------------------------------------------------------------------------- #
 # Stan
 # --------------------------------------------------------------------------- #
@@ -141,6 +146,8 @@ def stan() -> dict[str, Any]:
             "region": settings.ads_region.upper(),
             "redirect_uri": settings.ads_redirect_uri,
             "profile": _profile(),
+            # ID kont Amazon (accountInfo.id) - potrzebne do przypiecia licencji
+            "konta": _konta(),
         },
         "sp": {
             "client_id": _koncowka(settings.sp_client_id, 6),
@@ -314,6 +321,8 @@ def _test_ads() -> dict[str, Any]:
 
     try:
         profile = sync.sync_profiles()
+    except sync.KontoSpozaLicencji as exc:
+        return {"ok": False, "opis": str(exc)}
     except Exception as exc:  # noqa: BLE001 - komunikat idzie do uzytkownika
         log.warning("Test Ads API nieudany: %s", exc)
         tekst = str(exc)

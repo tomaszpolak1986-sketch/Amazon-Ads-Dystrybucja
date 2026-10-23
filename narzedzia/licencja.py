@@ -13,6 +13,10 @@ Wypisze klucz publiczny do wklejenia w backend/app/licencja.py.
 Licencja dla klienta:
 
     python narzedzia/licencja.py wydaj --klient "Murando" --do 2027-10-31
+    python narzedzia/licencja.py wydaj --klient "Murando" --do 2027-10-31 --konto A1B2C3D4E5F6G7
+
+--konto przypina licencje do kont reklamowych Amazon klienta (ID widac
+w panelu: Ustawienia -> Amazon Ads API -> ID konta).
 
 Sprawdzenie wydanego klucza:
 
@@ -79,13 +83,16 @@ def cmd_wydaj(args: argparse.Namespace) -> int:
         return 1
 
     prywatny = serialization.load_pem_private_key(KLUCZ_PRYWATNY.read_bytes(), password=None)
-    tresc = json.dumps(
-        {"klient": args.klient, "wazna_do": wazna_do.isoformat(), "wydana": dt.date.today().isoformat()},
-        ensure_ascii=False, separators=(",", ":"),
-    ).encode()
+    dane = {"klient": args.klient, "wazna_do": wazna_do.isoformat(), "wydana": dt.date.today().isoformat()}
+    konta = [k.strip() for k in (args.konto or []) if k.strip()]
+    if konta:
+        # Przypiecie do kont Amazon klienta (ID konta z Ustawien panelu)
+        dane["konta"] = konta
+    tresc = json.dumps(dane, ensure_ascii=False, separators=(",", ":")).encode()
     klucz = f"{_b64(tresc)}.{_b64(prywatny.sign(tresc))}"
 
-    print(f"Licencja: {args.klient}, wazna do {wazna_do.isoformat()} wlacznie")
+    print(f"Licencja: {args.klient}, wazna do {wazna_do.isoformat()} wlacznie"
+          + (f", konta Amazon: {', '.join(konta)}" if konta else ", bez przypiecia do konta Amazon"))
     print()
     print(f"LICENCJA={klucz}")
     return 0
@@ -106,6 +113,7 @@ def main() -> int:
     p = sub.add_parser("wydaj", help="wystawia licencje dla klienta")
     p.add_argument("--klient", required=True)
     p.add_argument("--do", required=True, help="ostatni dzien waznosci, RRRR-MM-DD")
+    p.add_argument("--konto", action="append", help="ID konta Amazon klienta (Ustawienia panelu); mozna kilka razy")
     p = sub.add_parser("sprawdz", help="sprawdza wydany klucz")
     p.add_argument("klucz")
     args = parser.parse_args()

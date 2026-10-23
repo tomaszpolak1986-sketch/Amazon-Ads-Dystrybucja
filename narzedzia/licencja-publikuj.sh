@@ -13,12 +13,7 @@ SLUG=$(slug "$KLIENT")
 LICENCJA=$("$PY" "$ROOT/narzedzia/licencja.py" wydaj --klient "$KLIENT" --do "$DO" | grep '^LICENCJA=' | cut -d= -f2-)
 [ -n "$LICENCJA" ] || { echo "Nie udalo sie wystawic licencji"; exit 1; }
 
-TMP=$(mktemp -d)
-printf '%s\n' "$LICENCJA" > "$TMP/licencja.txt"
-printf 'FROM scratch\nCOPY licencja.txt /licencja.txt\n' > "$TMP/Dockerfile"
-docker build -q -t "$REJESTR/adspanel-licencja:$SLUG" "$TMP" >/dev/null
-rm -rf "$TMP"
-wypchnij "$REJESTR/adspanel-licencja:$SLUG"
+publikuj_licencje "$SLUG" "$LICENCJA"
 
 echo "Opublikowano licencje: $KLIENT do $DO ($REJESTR/adspanel-licencja:$SLUG)."
 echo "Serwer klienta przyjmie ja najblizszej nocy o 3:30."

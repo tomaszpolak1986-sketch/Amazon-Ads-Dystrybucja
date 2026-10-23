@@ -36,6 +36,9 @@ docker pull -q postgres:17-alpine
 echo "== Licencja: $KLIENT do $DO"
 LICENCJA=$("$PY" "$ROOT/narzedzia/licencja.py" wydaj --klient "$KLIENT" --do "$DO" | grep '^LICENCJA=' | cut -d= -f2-)
 [ -n "$LICENCJA" ] || { echo "Nie udalo sie wystawic licencji"; exit 1; }
+# Ta sama licencja w magazynie - aktualizacje automatyczne jej nie podmienia
+publikuj_licencje "$SLUG" "$LICENCJA"
+echo "== Licencja opublikowana w magazynie (ta sama co w paczce)"
 
 echo "== Skladanie paczki w $CEL"
 rm -rf "$CEL"; mkdir -p "$CEL/pliki"

@@ -52,3 +52,17 @@ wypchnij() {
     echo "BLAD: nie udalo sie wyslac $1 - wydanie przerwane."
     exit 1
 }
+
+# Publikuje klucz licencji klienta w magazynie (obraz z jednym plikiem).
+# Uzywa go licencja-publikuj.sh i zbuduj-paczke.sh - paczka i magazyn maja
+# wtedy ten sam klucz, wiec pierwsza noc u klienta nie podmienia licencji
+# na "nowa" o tej samej dacie (sprawdzone na tescie 1.3.0).
+publikuj_licencje() {
+    local slug=$1 licencja=$2 tmp
+    tmp=$(mktemp -d)
+    printf '%s\n' "$licencja" > "$tmp/licencja.txt"
+    printf 'FROM scratch\nCOPY licencja.txt /licencja.txt\n' > "$tmp/Dockerfile"
+    docker build -q -t "$REJESTR/adspanel-licencja:$slug" "$tmp" >/dev/null
+    rm -rf "$tmp"
+    wypchnij "$REJESTR/adspanel-licencja:$slug"
+}

@@ -80,6 +80,45 @@ def issue_session(response: Response) -> None:
     )
 
 
+# --- haslo administratora (Ustawienia) ------------------------------------ #
+# Osobne ciasteczko, krotko wazne: odblokowane Ustawienia nie powinny zostac
+# otwarte na komputerze, od ktorego administrator odszedl.
+ADMIN_COOKIE = "adspanel_admin"
+ADMIN_MAX_AGE = 30 * 60
+
+
+def verify_admin_password(password: str) -> bool:
+    if not settings.admin_password_hash:
+        return False
+    try:
+        return _hasher.verify(settings.admin_password_hash, password)
+    except (VerifyMismatchError, InvalidHashError):
+        return False
+
+
+def issue_admin(response: Response) -> None:
+    token = URLSafeTimedSerializer(settings.auth_secret, salt="adspanel-admin").dumps({"v": 1})
+    response.set_cookie(
+        ADMIN_COOKIE, token, max_age=ADMIN_MAX_AGE, httponly=True, samesite="lax",
+        secure=settings.auth_cookie_secure, path="/",
+    )
+
+
+def clear_admin(response: Response) -> None:
+    response.delete_cookie(ADMIN_COOKIE, path="/")
+
+
+def is_admin(request: Request) -> bool:
+    token = request.cookies.get(ADMIN_COOKIE)
+    if not token or not settings.auth_secret:
+        return False
+    try:
+        URLSafeTimedSerializer(settings.auth_secret, salt="adspanel-admin").loads(token, max_age=ADMIN_MAX_AGE)
+        return True
+    except (BadSignature, SignatureExpired):
+        return False
+
+
 def clear_session(response: Response) -> None:
     response.delete_cookie(COOKIE_NAME, path="/")
 

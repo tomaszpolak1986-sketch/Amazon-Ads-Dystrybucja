@@ -940,6 +940,8 @@ export type KontoAmazon = {
   test?: { ok: boolean; opis: string };
 };
 
+export type AdminStan = { ustawione: boolean; odblokowane: boolean };
+
 export class ApiError extends Error {
   constructor(
     public status: number,
@@ -1040,6 +1042,10 @@ export const api = {
   zapiszSp: (body: { client_id: string; client_secret: string; refresh_token: string; region: string }) =>
     apiPut<KontoAmazon>("/api/ustawienia/amazon/sp", body),
   testSp: () => apiPost<KontoAmazon>("/api/ustawienia/amazon/sp/test", {}),
+  adminStan: () => apiGet<AdminStan>("/api/ustawienia/admin"),
+  adminOdblokuj: (haslo: string) => apiPost<AdminStan>("/api/ustawienia/admin/odblokuj", { haslo }),
+  adminZablokuj: () => apiPost<AdminStan>("/api/ustawienia/admin/zablokuj", {}),
+  adminHaslo: (obecne: string, nowe: string) => apiPut<AdminStan>("/api/ustawienia/admin/haslo", { obecne, nowe }),
   login: (password: string) => apiPost<{ authenticated: boolean }>("/api/auth/login", { password }),
   logout: () => apiPost<{ authenticated: boolean }>("/api/auth/logout", null),
   profiles: () => apiGet<Profile[]>("/api/profiles"),

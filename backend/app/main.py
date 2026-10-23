@@ -575,6 +575,7 @@ async def guard(request: Request, call_next):
 
 # Ustawienia -> Konto Amazon. Chronione tym samym guardem co reszta /api.
 app.include_router(konto_amazon.router)
+app.include_router(konto_amazon.router_admin)
 
 
 # CORS musi byc zarejestrowany PO guard: Starlette wstawia kazde kolejne

@@ -81,6 +81,9 @@ def main() -> int:
     p_pass = sub.add_parser("setpassword", help="ustawia haslo dostepu do panelu")
     p_pass.add_argument("--password", help="jesli pominiesz, skrypt zapyta")
 
+    p_adm = sub.add_parser("setadminpassword", help="ustawia haslo administratora (Ustawienia -> Konto Amazon)")
+    p_adm.add_argument("--password", help="jesli pominiesz, skrypt zapyta")
+
     p_sync = sub.add_parser("sync", help="pelny sync: encje + raporty")
     p_sync.add_argument("--profile", type=int, action="append", dest="profiles")
     p_sync.add_argument("--lookback", type=int, default=14)
@@ -282,6 +285,25 @@ def main() -> int:
         stan = licencja.sprawdz(args.klucz) if args.klucz else licencja.stan()
         print(json.dumps(stan.jako_slownik(), ensure_ascii=False))
         return 0 if stan.ok else 1
+
+    if args.command == "setadminpassword":
+        # Awaryjnie, gdy administrator zapomnial hasla - z panelu zmiana
+        # wymaga obecnego hasla, wiec bez dostepu do serwera nie da sie go obejsc
+        import getpass
+
+        from app import plik_env
+        from app.auth import hash_password
+
+        haslo = args.password or getpass.getpass("Nowe haslo administratora: ")
+        if not args.password and haslo != getpass.getpass("Powtorz: "):
+            print("Hasla sie roznia.")
+            return 1
+        if len(haslo) < 10:
+            print("Haslo musi miec co najmniej 10 znakow.")
+            return 1
+        plik_env.zapisz({"ADMIN_PASSWORD_HASH": hash_password(haslo)})
+        print("Haslo administratora zapisane. Zrestartuj backend, zeby zadzialalo.")
+        return 0
 
     if args.command == "initdb":
         init_db()

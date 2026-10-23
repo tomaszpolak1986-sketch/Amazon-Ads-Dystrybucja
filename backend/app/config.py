@@ -100,6 +100,10 @@ class Settings(BaseSettings):
 
     # --- dostep do panelu ---
     auth_password_hash: str = ""
+    # Osobne haslo do Ustawien (klucze Amazona). Pracownicy znaja haslo do
+    # panelu, ale kluczy nie zobacza ani nie zmienia. Puste = Ustawienia
+    # dostepne dla kazdego zalogowanego (panel prosi wtedy o ustawienie).
+    admin_password_hash: str = ""
     auth_secret: str = ""
     # Ciasteczko Secure wymaga HTTPS. Przy dostepie po http w sieci lokalnej
     # przegladarka odrzucilaby je i logowanie nie dzialaloby wcale.

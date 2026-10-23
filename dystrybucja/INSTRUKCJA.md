@@ -61,6 +61,13 @@ sudo docker compose exec api adspanel setpassword
 w **Ustawienia** w menu po lewej. Osoba z firmy, która ma dostęp do konta
 Amazon, może to zrobić sama, bez dostępu do serwera:
 
+0. **Hasło administratora** (pierwsza rzecz na stronie Ustawień). Musi być
+   inne niż hasło do panelu. Pracownicy znający tylko hasło do panelu nie
+   zobaczą ani nie zmienią kluczy Amazona. Zapisanych kluczy nie da się
+   podejrzeć nawet z hasłem administratora: widać tylko ich końcówki.
+   Zapomniane hasło administratora ustawisz na serwerze:
+   `sudo docker compose exec api adspanel setadminpassword`, a potem
+   `sudo docker compose restart api`.
 1. **Amazon Ads API:** wpisz Client ID i Client Secret, a potem kliknij
    **Zapisz i sprawdź klucze**. Panel od razu sprawdzi je w Amazonie.
 2. Kliknij **Połącz z Amazonem**, zaloguj się na konto z dostępem do reklam

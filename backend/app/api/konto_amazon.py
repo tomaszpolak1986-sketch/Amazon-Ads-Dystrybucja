@@ -19,18 +19,32 @@ import urllib.parse
 from typing import Any, Literal
 
 import httpx
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
 from sqlalchemy import select
 
-from .. import plik_env
+from .. import auth, plik_env
 from ..ads.auth import token_provider
 from ..config import ADS_ENDPOINTS, LWA_TOKEN_URL, SP_ENDPOINTS, settings
 from ..db import session_scope
 from ..models import Profile
 
 log = logging.getLogger(__name__)
-router = APIRouter(prefix="/api/ustawienia/amazon")
+
+
+def _wymaga_admina(request: Request) -> None:
+    """Klucze Amazona tylko dla administratora - gdy ma ustawione haslo.
+
+    Bez hasla administratora Ustawienia dzialaja jak dawniej (dla kazdego
+    zalogowanego), a strona prosi o jego ustawienie. Z haslem - pracownik
+    z samym haslem do panelu nie zobaczy stanu kluczy ani ich nie zmieni.
+    """
+    if settings.admin_password_hash and not auth.is_admin(request):
+        raise HTTPException(403, "Ustawienia są zablokowane – podaj hasło administratora.")
+
+
+router = APIRouter(prefix="/api/ustawienia/amazon", dependencies=[Depends(_wymaga_admina)])
+router_admin = APIRouter(prefix="/api/ustawienia/admin")
 
 # Strona logowania jest regionalna; token wymieniamy zawsze na api.amazon.com
 AUTH_HOSTS = {
@@ -50,6 +64,8 @@ Region = Literal["EU", "NA", "FE"]
 
 
 def _koncowka(wartosc: str, n: int = 4) -> str | None:
+    # Po zapisaniu klucze nie wracaja do przegladarki - nawet Client ID,
+    # ktory sam w sobie haslem nie jest. Koncowka wystarcza do rozpoznania.
     return f"…{wartosc[-n:]}" if wartosc else None
 
 
@@ -119,7 +135,7 @@ def _profile() -> list[dict[str, Any]]:
 def stan() -> dict[str, Any]:
     return {
         "ads": {
-            "client_id": settings.ads_client_id or None,
+            "client_id": _koncowka(settings.ads_client_id, 6),
             "client_secret": _koncowka(settings.ads_client_secret),
             "polaczone": bool(settings.ads_refresh_token),
             "region": settings.ads_region.upper(),
@@ -127,7 +143,7 @@ def stan() -> dict[str, Any]:
             "profile": _profile(),
         },
         "sp": {
-            "client_id": settings.sp_client_id or None,
+            "client_id": _koncowka(settings.sp_client_id, 6),
             "client_secret": _koncowka(settings.sp_client_secret),
             "refresh_token": _koncowka(settings.sp_refresh_token, 6),
             "region": settings.sp_region.upper(),
@@ -385,3 +401,55 @@ def _test_sp() -> dict[str, Any]:
         return {"ok": False, "opis": f"Połączono (rynki: {wynik.get('marketplaces', 0)}), ale brak dostępu "
                 "do raportu sprzedaży – aplikacja potrzebuje roli Brand Analytics."}
     return {"ok": True, "opis": f"Połączono – rynki: {wynik.get('marketplaces', 0)}, raport sprzedaży dostępny."}
+
+
+# --------------------------------------------------------------------------- #
+# Haslo administratora
+# --------------------------------------------------------------------------- #
+
+
+@router_admin.get("")
+def admin_stan(request: Request) -> dict[str, bool]:
+    ustawione = bool(settings.admin_password_hash)
+    return {"ustawione": ustawione, "odblokowane": (not ustawione) or auth.is_admin(request)}
+
+
+class AdminHaslo(BaseModel):
+    haslo: str
+
+
+@router_admin.post("/odblokuj")
+def admin_odblokuj(body: AdminHaslo, response: Response) -> dict[str, bool]:
+    if not auth.verify_admin_password(body.haslo):
+        time.sleep(1)  # spowalnia zgadywanie
+        raise HTTPException(401, "Nieprawidłowe hasło administratora.")
+    auth.issue_admin(response)
+    return {"ustawione": True, "odblokowane": True}
+
+
+@router_admin.post("/zablokuj")
+def admin_zablokuj(response: Response) -> dict[str, bool]:
+    auth.clear_admin(response)
+    return {"ustawione": bool(settings.admin_password_hash), "odblokowane": False}
+
+
+class AdminNoweHaslo(BaseModel):
+    obecne: str = ""
+    nowe: str
+
+
+@router_admin.put("/haslo")
+def admin_ustaw_haslo(body: AdminNoweHaslo, request: Request, response: Response) -> dict[str, bool]:
+    # Zmiana istniejacego hasla wymaga obecnego - samo odblokowanie nie
+    # wystarczy, zeby pracownik przy otwartych Ustawieniach go nie podmienil
+    if settings.admin_password_hash and not auth.verify_admin_password(body.obecne):
+        time.sleep(1)
+        raise HTTPException(401, "Obecne hasło administratora jest nieprawidłowe.")
+    if len(body.nowe) < 10:
+        raise HTTPException(400, "Hasło administratora musi mieć co najmniej 10 znaków.")
+    if auth.verify_password(body.nowe):
+        raise HTTPException(400, "Hasło administratora musi być inne niż hasło do panelu.")
+    plik_env.zapisz({"ADMIN_PASSWORD_HASH": auth.hash_password(body.nowe)})
+    auth.issue_admin(response)
+    log.info("Ustawiono haslo administratora z panelu")
+    return {"ustawione": True, "odblokowane": True}

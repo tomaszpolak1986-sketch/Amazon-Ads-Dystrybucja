@@ -150,3 +150,44 @@ frontend/
 - **Mów wprost, czego nie wiadomo.** Panel woli postawić kreskę niż pokazać
   liczbę bez pokrycia — tak jest z TACOS bez sprzedaży całkowitej i z oceną
   zmian, która czeka 7 dni na dojrzałość danych.
+
+---
+
+## Wydania dla klientów (wersja instalowana u klienta)
+
+Panel jest sprzedawany na licencję i instalowany **na serwerze klienta**
+(instaluje informatyk klienta). Kod źródłowy nie może tam trafić.
+
+- **Obraz backendu** (`backend/Dockerfile.wydanie`) kompiluje pakiet `app`
+  i skrypty Nuitką do `.so` — w obrazie nie ma żadnego pliku `.py` panelu.
+  `app/_wydanie.py` w repo ma `WYMAGA_LICENCJI = False`; Dockerfile nadpisuje
+  go na `True` przed kompilacją. **Nie zamieniaj tego na zmienną środowiskową**
+  — klient ustawia środowisko sam i wyłączyłby licencję.
+- **Licencja** (`app/licencja.py`): klucz Ed25519, w kodzie tylko klucz
+  publiczny. Opcjonalne pole `konta` przypina licencję do kont Amazon klienta
+  (blokada w `etl/sync.py::sync_profiles`). Klucz prywatny leży POZA repo
+  (`D:\Claude Projekty\AdsPanel-KLUCZ-PRYWATNY\` — na nowym komputerze odtworzyć
+  z kopii) i **nigdy nie może trafić do repozytorium ani do obrazu**.
+- **Ustawienia → Konto Amazon** (`api/konto_amazon.py`): klient sam wpisuje
+  klucze Ads/SP-API; strona chroniona hasłem administratora, sekrety nigdy
+  nie wracają do przeglądarki (tylko końcówki).
+- **Aktualizacje automatyczne**: obrazy w prywatnym magazynie
+  `ghcr.io/tomaszpolak1986-sketch` (`adspanel-api|web:<wersja>|stabilna`,
+  `adspanel-licencja:<klient>`); serwer klienta co noc uruchamia
+  `dystrybucja/aktualizuj-auto.sh` (kopia bazy, aktualizacja, cofnięcie przy
+  błędzie).
+
+Narzędzia (Git Bash, czyste repo, Docker Desktop zalogowany do ghcr.io):
+
+```bash
+bash narzedzia/wydaj.sh 1.5.0                                  # nowa wersja dla wszystkich klientów
+bash narzedzia/licencja-publikuj.sh "Murando" 2027-04-30 [ID]  # przedłużenie licencji zdalnie
+bash narzedzia/zbuduj-paczke.sh 1.5.0 "Klient" 2027-01-31 [ID] # paczka ZIP dla nowego klienta
+```
+
+Przed każdym wydaniem: test instalacji i aktualizacji w kontenerze
+`docker:dind` (czysty serwer). Skrypty dla Linuksa muszą mieć końce linii LF
+(`.gitattributes`).
+
+Repozytorium `tomaszpolak1986-sketch/AmazonAds` to **inna** aplikacja —
+nie pushować tam nic z tego repo.

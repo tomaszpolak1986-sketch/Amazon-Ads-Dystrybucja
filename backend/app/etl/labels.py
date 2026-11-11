@@ -220,6 +220,37 @@ _LOCK = threading.Lock()
 _WSZYSTKIE = "*"
 
 
+def kategorie(session, marketplace_id: str, szukaj: str | None = None,
+              limit: int = 60) -> list[dict[str, str]]:
+    """Kategorie znane dla rynku - do wyboru przy targetowaniu produktowym.
+
+    Slownik jest pelny (DE ma ich ponad 32 tys.), wiec bez szukania oddajemy
+    tylko poczatek listy. Sens ma dopiero wpisanie fragmentu nazwy: panel nie
+    jest przegladarka drzewa kategorii Amazona i nie udaje, ze nia jest.
+    """
+    stmt = select(
+        TargetingLabel.ext_id, TargetingLabel.name, TargetingLabel.parent_id
+    ).where(
+        TargetingLabel.marketplace_id == marketplace_id,
+        TargetingLabel.kind == "CATEGORY",
+    )
+    if szukaj:
+        stmt = stmt.where(TargetingLabel.name.ilike(f"%{szukaj.strip()}%"))
+    rows = session.execute(stmt.order_by(TargetingLabel.name).limit(limit)).all()
+
+    # Kategoria nadrzedna - dwie galezie Amazona potrafia miec identyczna
+    # nazwe liscia ("Zubehor"), a bez rodzica nie da sie ich rozroznic.
+    nazwy = _zbuduj(session, marketplace_id)
+    return [
+        {
+            "category_id": ext_id,
+            "name": name,
+            "parent": nazwy.get(("CATEGORY", parent_id or "")) or "",
+        }
+        for ext_id, name, parent_id in rows
+    ]
+
+
 def marki(session, marketplace_id: str, szukaj: str | None = None,
           limit: int = 60) -> list[dict[str, str]]:
     """Marki znane dla rynku - do wyboru przy wykluczaniu.

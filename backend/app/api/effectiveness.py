@@ -91,6 +91,58 @@ def _agreguj(wiersze: list[Any]) -> dict[str, Any] | None:
     }
 
 
+# Pasmo, ponizej ktorego roznica jest szumem, nie skutkiem. Dane dzienne
+# jednej kampanii potrafia skakac o kilka procent bez zadnej przyczyny po
+# naszej stronie, wiec bez tego pasma "poprawa" i "pogorszenie" opisywalyby
+# glownie pogode.
+PASMO_SZUMU = 5.0
+
+
+def _werdykt(pozycja: dict[str, Any]) -> str:
+    """Jak wypadlo PO zmianie - nie: co zmiana spowodowala.
+
+    Rozroznienie jest istotne i nie jest ostrozniczkowaniem. Rownolegle
+    zmienia sie sezon, konkurencja i ceny; ten modul pokazuje nastepstwo
+    w czasie, nie przyczyne.
+
+    Werdykt zalezy od KIERUNKU zmiany i to jest sedno. Ocenianie wszystkiego
+    regula "ACOS spadl = dobrze" karze kazda decyzje o wzroscie: podniesienie
+    stawki ma z definicji podniesc ACOS, bo dokupuje ruch drozej - i gdyby
+    tego nie robilo, nie byloby po co go podnosic. Przy takiej mierze panel
+    pokazywalby, ze 85 ze 175 zmian "zaszkodzilo", podczas gdy wiekszosc
+    z nich dokladnie wykonala to, o co prosilismy.
+
+    * zmiana W GORE (stawka, budzet, modyfikator) - lepiej, gdy sprzedaz
+      dzienna urosla, a rentownosc nie posypala sie przy okazji;
+    * zmiana W DOL - lepiej, gdy ACOS spadl, a sprzedaz nie zalamala sie
+      razem z nim. Samo ciecie kosztu nie wystarcza: stawke zawsze da sie
+      obnizyc do zera i ACOS tez spadnie, razem z cala sprzedaza.
+    """
+    delta = pozycja.get("delta") or {}
+    acos = delta.get("acos")
+    sprzedaz = delta.get("daily_sales")
+    koszt = delta.get("daily_cost")
+    if acos is None and sprzedaz is None:
+        return "nieokreslony"
+
+    stara, nowa = pozycja.get("old_num"), pozycja.get("new_num")
+    w_gore = stara is not None and nowa is not None and nowa > stara
+
+    if w_gore:
+        if sprzedaz is not None and sprzedaz >= PASMO_SZUMU                 and (acos is None or acos <= PASMO_SZUMU):
+            return "lepiej"
+        # Zaplacilismy wiecej i nie przyszlo za to nic.
+        if koszt is not None and koszt >= PASMO_SZUMU                 and (sprzedaz is None or sprzedaz <= 0):
+            return "gorzej"
+        return "bez zmiany"
+
+    if acos is not None and acos <= -PASMO_SZUMU             and (sprzedaz is None or sprzedaz > -2 * PASMO_SZUMU):
+        return "lepiej"
+    if acos is not None and acos >= PASMO_SZUMU:
+        return "gorzej"
+    return "bez zmiany"
+
+
 def analyze(
     session: Session,
     profile_id: int | None = None,
@@ -254,6 +306,9 @@ def analyze(
             "median_cost_delta": round(statistics.median(koszty), 1) if koszty else None,
         })
 
+    for g in gotowe:
+        g["verdict"] = _werdykt(g)
+
     gotowe.sort(key=lambda g: g["changed_on"], reverse=True)
     czekaja.sort(key=lambda c: c["days_left"])
 
@@ -265,4 +320,15 @@ def analyze(
         "waiting": czekaja[:limit],
         "waiting_total": len(czekaja),
         "summary": podsumowanie,
+        # Jednozdaniowe rozliczenie panelu z wlasnych rekomendacji. Bez niego
+        # nikt nie wie, czy zmiany cokolwiek daja - a kazda kolejna decyzja
+        # jest tak samo niepewna jak pierwsza.
+        "scorecard": {
+            "measured": len(gotowe),
+            "better": sum(1 for g in gotowe if g["verdict"] == "lepiej"),
+            "worse": sum(1 for g in gotowe if g["verdict"] == "gorzej"),
+            "flat": sum(1 for g in gotowe if g["verdict"] == "bez zmiany"),
+            "waiting": len(czekaja),
+            "noise_band": PASMO_SZUMU,
+        },
     }

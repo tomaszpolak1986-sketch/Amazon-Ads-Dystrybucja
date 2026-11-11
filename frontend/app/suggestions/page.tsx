@@ -209,6 +209,18 @@ export default function SuggestionsPage() {
       cost: widoczne
         .filter((r) => r.level === "bad")
         .reduce((a, r) => a + (r.cost ?? 0), 0),
+      // Pieniadze stojace za kazda grupa, w przeliczeniu na 30 dni. Strata
+      // i zapas licza sie w tych samych euro, ale nie znacza tego samego -
+      // stad osobne sumy i osobne slowa pod nimi, zamiast jednej liczby.
+      impactBad: widoczne
+        .filter((r) => r.level === "bad")
+        .reduce((a, r) => a + (r.impact ?? 0), 0),
+      impactWarn: widoczne
+        .filter((r) => r.level === "warn")
+        .reduce((a, r) => a + (r.impact ?? 0), 0),
+      impactGood: widoczne
+        .filter((r) => r.level === "good")
+        .reduce((a, r) => a + (r.impact ?? 0), 0),
       critical: widoczne.filter((r) => r.critical).length,
     };
   }, [all, pasuje]);
@@ -349,7 +361,7 @@ export default function SuggestionsPage() {
                     className="text-[10px] text-accent hover:underline"
                     title={`Słowo „${r.pattern.token}" wraca w ${r.pattern.terms} niesprzedających frazach i w żadnej sprzedającej. Wyrażenie zablokuje je naraz.`}
                   >
-                    {`„${r.pattern.token}”`} w {r.pattern.terms} frazach → wyrażenie
+                    {`„${r.pattern.token}"`} w {r.pattern.terms} frazach → wyrażenie
                   </button>
                 )}
               </div>
@@ -443,6 +455,29 @@ export default function SuggestionsPage() {
           return (
             <span className={r.critical ? "font-medium text-bad" : undefined}>
               {money(c.getValue(), currency)}
+            </span>
+          );
+        },
+      },
+      {
+        accessorKey: "impact",
+        header: "Waga",
+        meta: { align: "right" },
+        cell: (c: any) => {
+          const r = c.row.original as SuggestionRow;
+          const v = r.impact ?? 0;
+          if (!v) return <span className="text-muted">-</span>;
+          const strata = r.level === "bad" || r.level === "warn";
+          return (
+            <span
+              className={strata ? "font-medium text-bad" : "text-good"}
+              title={
+                strata
+                  ? "Wydatek ponad próg rentowności, w przeliczeniu na 30 dni - tyle można odzyskać"
+                  : "Niewykorzystany zapas: ile można jeszcze wydać, zostając w progu. To nie jest zysk."
+              }
+            >
+              {money(v, currency)}
             </span>
           );
         },
@@ -649,7 +684,7 @@ export default function SuggestionsPage() {
           <div className="text-xs font-medium text-bad uppercase">Wymaga reakcji</div>
           <div className="tnum mt-1 text-xl font-semibold">{counts.bad}</div>
           <div className="mt-0.5 text-xs text-muted">
-            {money(counts.cost, currency)} wydatku bez zwrotu
+            {money(counts.impactBad, currency)} do odzyskania / 30 dni
           </div>
         </button>
         <button
@@ -661,7 +696,9 @@ export default function SuggestionsPage() {
         >
           <div className="text-xs font-medium text-warn uppercase">Do poprawy</div>
           <div className="tnum mt-1 text-xl font-semibold">{counts.warn}</div>
-          <div className="mt-0.5 text-xs text-muted">stawki oderwane od wyników</div>
+          <div className="mt-0.5 text-xs text-muted">
+            {money(counts.impactWarn, currency)} do odzyskania / 30 dni
+          </div>
         </button>
         <button
           onClick={() => setLevelFilter(levelFilter === "good" ? "" : "good")}
@@ -672,7 +709,9 @@ export default function SuggestionsPage() {
         >
           <div className="text-xs font-medium text-good uppercase">Okazje do wzrostu</div>
           <div className="tnum mt-1 text-xl font-semibold">{counts.good}</div>
-          <div className="mt-0.5 text-xs text-muted">miejsca, gdzie warto dołożyć</div>
+          <div className="mt-0.5 text-xs text-muted">
+            {money(counts.impactGood, currency)} zapasu na większy wydatek
+          </div>
         </button>
       </div>
 

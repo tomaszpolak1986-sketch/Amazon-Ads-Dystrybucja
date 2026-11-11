@@ -151,6 +151,27 @@ def _sums(model, kurs=None):
     ]
 
 
+def _kategoria_z_wyrazenia(
+    wyrazenie: Any, labels: dict[tuple[str, str], str] | None
+) -> tuple[str | None, str | None]:
+    """Identyfikator i nazwa kategorii z wyrazenia targetu produktowego."""
+    if isinstance(wyrazenie, str):
+        try:
+            wyrazenie = json.loads(wyrazenie)
+        except (ValueError, TypeError):
+            return None, None
+    if not isinstance(wyrazenie, (list, tuple)):
+        return None, None
+    for czesc in wyrazenie:
+        if not isinstance(czesc, dict):
+            continue
+        if (czesc.get("type") or "").upper() == "ASIN_CATEGORY_SAME_AS":
+            wartosc = str(czesc.get("value") or "")
+            nazwa = (labels or {}).get(("CATEGORY", wartosc)) or wartosc
+            return wartosc or None, nazwa
+    return None, None
+
+
 def _labels_for(session: Session, profile_id: int | None) -> dict[tuple[str, str], str]:
     """Slownik nazw kategorii i marek dla rynku tego profilu.
 
@@ -494,7 +515,7 @@ def campaigns(
             Portfolio.name.label("portfolio_name"),
             Profile.country_code.label("country"),
             Profile.currency_code.label("currency"),
-            *_sums(CampaignDaily),
+            *_sums(CampaignDaily, kurs_dnia(CampaignDaily, profile_id)),
         )
         .select_from(Campaign)
         .join(CampaignDaily, and_(*join_window), isouter=True)
@@ -505,6 +526,16 @@ def campaigns(
             isouter=True,
         )
         .join(Profile, Profile.profile_id == Campaign.profile_id, isouter=True)
+        # Kwoty w widoku laczonym musza byc w jednej walucie: bez tego
+        # 198 GBP stalo w tabeli obok 198 EUR, a front i tak podpisywal
+        # wszystko jako EUR. Przy wybranym rynku `kurs_dnia` daje 1.0,
+        # wiec dla pojedynczego rynku nic sie nie zmienia.
+        .join(
+            FxRate,
+            and_(FxRate.date == CampaignDaily.date,
+                 FxRate.currency == Profile.currency_code),
+            isouter=True,
+        )
         .group_by(
             Campaign.campaign_id, Campaign.name, Campaign.state, Campaign.targeting_type,
             Campaign.ad_product,
@@ -556,6 +587,7 @@ def campaigns(
     ctx = advice.build_context(out, (end - start).days + 1, sensitivity)
     for row in out:
         row["suggestions"] = advice.suggest_campaign(row, ctx)
+    _odsiej_zalatwione(session, profile_id, out, "CAMPAIGN", "campaign_id")
     return out
 
 
@@ -592,13 +624,23 @@ def targets(
             # 0,23 GBP - ta sama liczba w dwoch walutach, czyli komunikat,
             # ktoremu nie sposob ufac.
             Profile.currency_code.label("currency"),
-            *_sums(TargetDaily),
+            *_sums(TargetDaily, kurs_dnia(TargetDaily, profile_id)),
         )
         .join(Campaign, Campaign.campaign_id == TargetDaily.campaign_id, isouter=True)
         .join(AdGroup, AdGroup.ad_group_id == TargetDaily.ad_group_id, isouter=True)
         .join(Keyword, Keyword.keyword_id == TargetDaily.target_id, isouter=True)
         .join(Target, Target.target_id == TargetDaily.target_id, isouter=True)
         .join(Profile, Profile.profile_id == TargetDaily.profile_id, isouter=True)
+        # Kwoty w widoku laczonym musza byc w jednej walucie: bez tego
+        # 198 GBP stalo w tabeli obok 198 EUR, a front i tak podpisywal
+        # wszystko jako EUR. Przy wybranym rynku `kurs_dnia` daje 1.0,
+        # wiec dla pojedynczego rynku nic sie nie zmienia.
+        .join(
+            FxRate,
+            and_(FxRate.date == TargetDaily.date,
+                 FxRate.currency == Profile.currency_code),
+            isouter=True,
+        )
         .where(_window(TargetDaily, profile_id, start, end))
         .group_by(
             TargetDaily.target_id, TargetDaily.target_kind, TargetDaily.ad_product,
@@ -641,16 +683,26 @@ def targets(
         # "keyword" i sugestia szla potem na niewlasciwy zasob Amazona.
         if (row.get("ad_product") or "SP") == "SP":
             row["target_kind"] = targeting_names.target_kind(row.get("match_type"))
+        wyrazenie = row.pop("expression", None)
         row["target_text"] = targeting_names.display_name(
-            row.get("match_type"), row.get("target_text"),
-            row.pop("expression", None), labels,
+            row.get("match_type"), row.get("target_text"), wyrazenie, labels,
         )
         row["match_label"] = targeting_names.match_label(row.get("match_type"))
+        # Kategoria w postaci surowej, obok nazwy. Formularz dodawania targetu
+        # potrzebuje identyfikatora, a nie etykiety: marka jest dla Amazona
+        # ZAWEZENIEM kategorii, wiec bez jej id nie da sie zlozyc wyrazenia.
+        # Bierzemy ja z targetow, ktore juz w tej kampanii sa - to naturalny
+        # zbior do wyboru i nie wymaga przeszukiwania 258 tys. kategorii.
+        kat_id, kat_nazwa = _kategoria_z_wyrazenia(wyrazenie, labels)
+        if kat_id:
+            row["category_id"] = kat_id
+            row["category_name"] = kat_nazwa
         out.append(row)
 
     ctx = advice.build_context(out, (end - start).days + 1, sensitivity)
     for row in out:
         row["suggestions"] = advice.suggest_target(row, ctx)
+    _odsiej_zalatwione(session, profile_id, out, "TARGET", "target_id")
     return out
 
 
@@ -679,11 +731,21 @@ def search_terms(
             AdGroup.name.label("ad_group_name"),
             # Waluta rynku - patrz komentarz przy `targets`.
             Profile.currency_code.label("currency"),
-            *_sums(SearchTermDaily),
+            *_sums(SearchTermDaily, kurs_dnia(SearchTermDaily, profile_id)),
         )
         .join(Campaign, Campaign.campaign_id == SearchTermDaily.campaign_id, isouter=True)
         .join(AdGroup, AdGroup.ad_group_id == SearchTermDaily.ad_group_id, isouter=True)
         .join(Profile, Profile.profile_id == SearchTermDaily.profile_id, isouter=True)
+        # Kwoty w widoku laczonym musza byc w jednej walucie: bez tego
+        # 198 GBP stalo w tabeli obok 198 EUR, a front i tak podpisywal
+        # wszystko jako EUR. Przy wybranym rynku `kurs_dnia` daje 1.0,
+        # wiec dla pojedynczego rynku nic sie nie zmienia.
+        .join(
+            FxRate,
+            and_(FxRate.date == SearchTermDaily.date,
+                 FxRate.currency == Profile.currency_code),
+            isouter=True,
+        )
         .where(_window(SearchTermDaily, profile_id, start, end))
         .group_by(
             SearchTermDaily.search_term, SearchTermDaily.campaign_id,
@@ -709,6 +771,8 @@ def search_terms(
     ctx = advice.build_context(out, (end - start).days + 1, sensitivity)
     for row in out:
         row["suggestions"] = advice.suggest_search_term(row, ctx)
+    _dopisz_samokonkurencje(session, profile_id, out)
+    _odsiej_zalatwione(session, profile_id, out, "SEARCH_TERM", "search_term")
     return out
 
 
@@ -743,6 +807,10 @@ def campaign_detail(
             Campaign.name,
             Campaign.state,
             Campaign.targeting_type,
+            # Typ reklamy decyduje o tym, co w ogole da sie tu zmienic:
+            # strategia licytacji i modyfikatory placementow istnieja tylko
+            # w Sponsored Products.
+            Campaign.ad_product,
             Campaign.budget_amount.label("budget"),
             Campaign.budget_type,
             Campaign.bidding_strategy,
@@ -965,6 +1033,7 @@ def placements_by_campaign(
     best = min((r["acos"] for r in out if r.get("acos") is not None), default=None)
     for row in out:
         row["suggestions"] = advice.suggest_placement(row, ctx, best)
+    _odsiej_zalatwione(session, profile_id, out, "PLACEMENT", "placement")
     return out
 
 
@@ -1069,7 +1138,7 @@ def products(
             func.max(ProductDaily.asin).label("asin"),
             Profile.country_code.label("country"),
             Profile.currency_code.label("currency"),
-            *_sums(ProductDaily),
+            *_sums(ProductDaily, kurs_dnia(ProductDaily, profile_id)),
         )
         .join(Profile, Profile.profile_id == ProductDaily.profile_id, isouter=True)
         .where(_window(ProductDaily, profile_id, start, end))
@@ -1221,6 +1290,16 @@ def product_ads(
         .join(Campaign, Campaign.campaign_id == ProductAd.campaign_id, isouter=True)
         .join(AdGroup, AdGroup.ad_group_id == ProductAd.ad_group_id, isouter=True)
         .join(Profile, Profile.profile_id == ProductAd.profile_id, isouter=True)
+        # Kwoty w widoku laczonym musza byc w jednej walucie: bez tego
+        # 198 GBP stalo w tabeli obok 198 EUR, a front i tak podpisywal
+        # wszystko jako EUR. Przy wybranym rynku `kurs_dnia` daje 1.0,
+        # wiec dla pojedynczego rynku nic sie nie zmienia.
+        .join(
+            FxRate,
+            and_(FxRate.date == ProductDaily.date,
+                 FxRate.currency == Profile.currency_code),
+            isouter=True,
+        )
         .where(ProductAd.state != "ARCHIVED")
         .group_by(
             ProductAd.ad_id, ProductAd.sku, ProductAd.asin, ProductAd.state,
@@ -1247,6 +1326,7 @@ def product_ads(
     ctx = advice.build_context(out, (end - start).days + 1, sensitivity)
     for row in out:
         row["suggestions"] = advice.suggest_product(row, ctx)
+    _odsiej_zalatwione(session, profile_id, out, "PRODUCT", "ad_id")
     return out
 
 
@@ -1272,6 +1352,89 @@ def campaign_portfolios(
     }
 
 
+# Kody sugestii, ktore OSZCZEDZAJA - pozycja wydaje wiecej, niz sie zwraca.
+# Stawka pieniezna to nadwyzka wydatku ponad prog rentownosci.
+KODY_OSZCZEDNOSCI = frozenset({
+    "kill", "term_kill", "product_kill", "no_conversion",
+    "bid_down", "high_acos", "high_acos_low_ctr", "placement_down",
+    "product_expensive", "low_cvr", "self_competition",
+})
+
+# Kody, ktore DOKLADAJA - pozycja zwraca sie lepiej, niz zaklada prog, wiec
+# zostaje niewykorzystany zapas na wiekszy wydatek.
+KODY_WZROSTU = frozenset({
+    "bid_up", "placement_up", "budget_capped", "bid_slack", "harvest",
+})
+
+
+def _waga_pieniezna(row: dict[str, Any], kod: str, dni: int, ref_acos: float) -> float:
+    """Ile pieniedzy stoi za ta sugestia, przeliczone na 30 dni.
+
+    Liczymy WYLACZNIE z danych tej pozycji - kosztu, sprzedazy i progu ACOS
+    wyliczonego ze sredniej konta. Zadnych mnoznikow "z doswiadczenia",
+    zadnego zgadywania, o ile wzrosnie sprzedaz po zmianie stawki: takiej
+    liczby nikt nie zna, a podana wygladalaby na obietnice.
+
+    Dwie wielkosci, obie wprost z rachunku:
+
+    * oszczednosc = koszt - sprzedaz * prog_acos, czyli ile wydajesz PONAD to,
+      co przy zalozonej rentownosci wolno wydac. Przy zerowej sprzedazy to
+      caly koszt pozycji.
+    * zapas = sprzedaz * prog_acos - koszt, czyli ile MOZNA by jeszcze wydac,
+      zostajac w progu. To nie jest zysk, tylko miejsce na ruch - i tak jest
+      opisane w panelu.
+
+    Normalizacja do 30 dni sluzy porownywalnosci miedzy oknami; przy oknie
+    30-dniowym nie zmienia niczego.
+    """
+    koszt = float(row.get("cost") or 0.0)
+    sprzedaz = float(row.get("sales") or 0.0)
+    prog = max(0.0, ref_acos) / 100.0
+    skala = 30.0 / max(1, dni)
+
+    if kod in KODY_OSZCZEDNOSCI:
+        return round(max(0.0, koszt - sprzedaz * prog) * skala, 2)
+    if kod in KODY_WZROSTU:
+        return round(max(0.0, sprzedaz * prog - koszt) * skala, 2)
+    return 0.0
+
+
+def _odsiej_zalatwione(
+    session: Session, profile_id: int | None,
+    rows: list[dict[str, Any]], scope: str, id_key: str,
+) -> None:
+    """Zdejmuje z wierszy sugestie, ktore sa juz zalatwione.
+
+    Blokada po zatwierdzeniu zmiany - trwala dla wykluczen i przejec, tygodniowa
+    dla strojenia stawek - siedziala dotad WYLACZNIE w `all_suggestions`, czyli
+    na ekranie Sugestii. Tabele (Kampanie, Targetowanie, Frazy, Placementy,
+    Produkty) licza swoja kolumne "Sugestia" wprost z `advice`, wiec pokazywaly
+    propozycje, ktora panel juz sam uznal za zalatwiona.
+
+    Wygladalo to najgorzej, jak moze wygladac: obnizasz stawke zgodnie z
+    sugestia, wracasz na liste i ta sama pozycja kaze obnizyc jeszcze raz -
+    tyle ze dane pod nia pochodza sprzed zmiany. Karencja istnieje po to, zeby
+    nie strzelac w ciemno, zanim widac skutek poprzedniej korekty.
+    """
+    if not rows:
+        return
+    zakolejkowane = actions_mod.queued_action_keys(session, profile_id)
+    odrzucone = dismissed_keys(session, profile_id)
+    if not zakolejkowane and not odrzucone:
+        return
+    for row in rows:
+        eid = str(row.get(id_key) or "")
+        zostaja = []
+        for sug in row.get("suggestions") or []:
+            akcja = sug.get("action")
+            if akcja and actions_mod.action_key(akcja) in zakolejkowane:
+                continue
+            if (scope, eid, sug.get("code")) in odrzucone:
+                continue
+            zostaja.append(sug)
+        row["suggestions"] = zostaja
+
+
 def all_suggestions(
     session: Session, profile_id: int | None, start: dt.date, end: dt.date,
     only_actionable: bool = True, limit: int = 500,
@@ -1286,6 +1449,18 @@ def all_suggestions(
     """
     out: list[dict[str, Any]] = []
     portfele = campaign_portfolios(session, profile_id)
+    # Prog rentownosci: srednia konta z tego okna, przyciete sufitem - ta sama
+    # wartosc, do ktorej porownuje sie kazda pojedyncza sugestia.
+    dni_okna = (end - start).days + 1
+    # UWAGA: kpis() zwraca {range, current, previous, delta_pct} - ACOS siedzi
+    # w "current". Siegniecie po kpi["acos"] dawalo None, wiec prog spadal do
+    # sufitu (30%) zamiast sredniej konta (17,1%). Wagi byly przez to liczone
+    # wzgledem zlej poprzeczki: straty zanizone, a zapas na wzrost zawyzony
+    # prawie dwukrotnie.
+    kpi = kpis(session, profile_id, start, end).get("current") or {}
+    sredni_acos = float(kpi.get("acos") or 0.0)
+    prog_acos = min(sredni_acos, float(settings.acos_ceiling)) if sredni_acos > 0 \
+        else float(settings.acos_ceiling)
 
     def collect(rows: list[dict[str, Any]], scope: str, id_key: str, name_key: str):
         for row in rows:
@@ -1328,6 +1503,9 @@ def all_suggestions(
                     "sales_own": row.get("sales_own"),
                     **sug,
                 })
+                out[-1]["impact"] = _waga_pieniezna(
+                    row, sug.get("code") or "", dni_okna, prog_acos
+                )
 
     collect(
         campaigns(session, profile_id, start, end, limit=1000, sensitivity=sensitivity),
@@ -1348,9 +1526,18 @@ def all_suggestions(
         "PRODUCT", "ad_id", "sku",
     )
 
-    # Najpierw to, co kosztuje najwiecej - tam decyzja ma najwieksza wage
+    # W obrebie poziomu ustawiamy po PIENIADZACH, nie po koszcie: obnizka na
+    # pozycji palacej 600 EUR przy ACOS 48% jest warta trzydziestu korekt po
+    # 3 EUR, a sam koszt tego nie rozroznia.
+    #
+    # Poziom zostaje kluczem PIERWSZYM i to jest rozstrzygniecie merytoryczne,
+    # nie kosmetyka. Oszczednosc i zapas na wzrost licza sie w tych samych
+    # euro, ale nie znacza tego samego: 471 EUR miejsca na wiekszy wydatek to
+    # nie 471 EUR odzyskanych. Wspolny ranking wypchnalby okazje nad straty,
+    # bo zapasu jest z natury wiecej - na tym koncie 7111 EUR wobec 609 EUR.
     order = {"bad": 0, "warn": 1, "good": 2, "info": 3}
-    out.sort(key=lambda x: (order.get(x["level"], 9), -(x.get("cost") or 0)))
+    out.sort(key=lambda x: (order.get(x["level"], 9), -(x.get("impact") or 0),
+                            -(x.get("cost") or 0)))
     out = _bez_powtorzonych_akcji(out)
     out = out[:limit]
 
@@ -1476,6 +1663,101 @@ def _juz_wykluczone(
         str(action.get("match_type") or "NEGATIVE_EXACT").upper(),
     )
     return klucz in istniejace
+
+
+# Ponizej tej kwoty wydatku przeniesienie frazy pod wlasna stawke nie zmienia
+# niczego istotnego - a kazda pozycja na liscie kosztuje uwage.
+PROG_SAMOKONKURENCJI = 10.0
+
+
+def _nadwyzka_ponad_prog(row: dict[str, Any]) -> bool:
+    """Czy fraza wydaje wiecej, niz sie zwraca - wtedy pokazujemy ja zawsze."""
+    acos = row.get("acos")
+    return acos is not None and acos > float(settings.acos_ceiling)
+
+
+def _dopisz_samokonkurencje(
+    session: Session, profile_id: int | None, rows: list[dict[str, Any]]
+) -> None:
+    """Frazy, na ktore konto licytuje w dwoch miejscach naraz.
+
+    Przejecie frazy zaklada keyword EXACT w kampanii manualnej, zeby miec
+    kontrole nad stawka. Kampania zrodlowa licytuje na nia dalej - i dwie
+    wlasne kampanie staja do tej samej aukcji. Panel robil pierwsza polowe
+    tej operacji i nigdy nie proponowal drugiej.
+
+    To NIE jest przepalanie z definicji: taka fraza zwykle sprzedaje, a
+    wykluczenie przenosi ruch tam, gdzie stawka jest Twoja - nie kasuje
+    sprzedazy. Dlatego wartosc pieniezna liczy sie zwykla formula (nadwyzka
+    ponad prog rentownosci), a nie calym kosztem: przy frazie rentownej
+    wychodzi zero i pozycja nie udaje odzysku, ktorego nie ma.
+
+    Pomijamy fraze, ktora JEST keywordem w tej samej grupie - tam nie ma
+    z czym konkurowac - oraz te juz wykluczona.
+    """
+    if not rows:
+        return
+
+    exact = _teksty_keywordow(session, profile_id)
+    if not exact:
+        return
+
+    # Frazy bedace keywordem w konkretnej grupie: tam wiersz raportu opisuje
+    # ten wlasnie keyword, a nie konkurencje dwoch kampanii.
+    warunki = [Keyword.match_type == "EXACT", Keyword.state != "ARCHIVED"]
+    if profile_id:
+        warunki.append(Keyword.profile_id == profile_id)
+    w_grupie: set[tuple[str, str]] = {
+        (str(ag or ""), (txt or "").strip().lower())
+        for ag, txt in session.execute(
+            select(Keyword.ad_group_id, Keyword.keyword_text).where(*warunki)
+        ).all()
+    }
+    istniejace = _istniejace_wykluczenia(session)
+
+    for row in rows:
+        tekst = (row.get("search_term") or "").strip()
+        klucz = tekst.lower()
+        if not klucz or klucz not in exact:
+            continue
+        agid = str(row.get("ad_group_id") or "")
+        cid = str(row.get("campaign_id") or "")
+        if (agid, klucz) in w_grupie:
+            continue
+        if (agid, klucz, "NEGATIVE_EXACT") in istniejace:
+            continue
+        if (cid, klucz, "NEGATIVE_EXACT") in istniejace:
+            continue
+        # Prog kosztu. Bez niego lista rosla o 214 pozycji; z progiem zostaje
+        # 46 i nadal 83% spornego wydatku (1845 z 2212 EUR przez 30 dni).
+        # Reszta to frazy po kilka euro - przeniesienie takiego ruchu pod
+        # wlasna stawke nie zmienia niczego, a zajmuje miejsce decyzjom,
+        # ktore cos znacza. Fraza przepalajaca wchodzi mimo progu.
+        koszt = float(row.get("cost") or 0)
+        if koszt < PROG_SAMOKONKURENCJI and not _nadwyzka_ponad_prog(row):
+            continue
+
+        row.setdefault("suggestions", [])
+        row["suggestions"].append({
+            "code": "self_competition",
+            "level": "warn",
+            "title": "Wyklucz tutaj - masz już własny keyword",
+            "detail": (
+                "Ta fraza jest już keywordem ścisłym w innej kampanii, a ta "
+                "licytuje na nią dalej - dwie Twoje kampanie stają do tej samej "
+                "aukcji. Wykluczenie przeniesie ruch tam, gdzie stawka jest "
+                "Twoja; sprzedaży nie kasuje."
+            ),
+            "priority": 110,
+            "action": {
+                "type": "ADD_NEGATIVE",
+                "campaign_id": cid,
+                "ad_group_id": agid,
+                "keyword_text": tekst,
+                "match_type": "NEGATIVE_EXACT",
+            },
+            "basis": None,
+        })
 
 
 # Slowo krotsze niz to jest zwykle przyimkiem albo rozmiarem - jako wykluczenie

@@ -172,6 +172,46 @@ def set_campaign_budgets(client: AdsClient, pairs: Iterable[tuple[str, float]],
     return update(client, "campaign", records)
 
 
+def set_ad_group_default_bids(client: AdsClient, pairs: Iterable[tuple[str, float]]):
+    """Stawka domyslna grupy reklam.
+
+    Dotyczy kazdego targetu i keyworda, ktory wlasnej stawki nie ma - wiec
+    kazdego nowo zalozonego. Panel pokazywal ja od poczatku i nie pozwalal
+    ruszyc, co znaczylo, ze nowy target dostawal wartosc ustawiona kiedys
+    w konsoli i nikt jej potem nie weryfikowal.
+    """
+    records = [
+        {"adGroupId": str(gid), "defaultBid": round(float(bid), 2)}
+        for gid, bid in pairs
+    ]
+    return update(client, "adGroup", records)
+
+
+# Strategie licytacji Sponsored Products. Nazwy sa z API, nie z interfejsu
+# Amazona - konsola mowi "Dynamiczne stawki - tylko w dol", API
+# "LEGACY_FOR_SALES". Tlumaczenie siedzi w panelu, zeby zadanie bylo doslowne.
+STRATEGIE = {
+    "LEGACY_FOR_SALES": "Dynamiczne - tylko w dol",
+    "AUTO_FOR_SALES": "Dynamiczne - w gore i w dol",
+    "MANUAL": "Stale stawki",
+    "RULE_BASED": "Wedlug reguly",
+}
+
+
+def set_campaign_bidding_strategy(client: AdsClient, pairs: Iterable[tuple[str, str]]):
+    """Strategia licytacji kampanii.
+
+    Zmienia sposob, w jaki Amazon traktuje KAZDA stawke w kampanii, wiec
+    skutek jest szerszy niz przy pojedynczej korekcie - i dlatego idzie przez
+    te sama kolejke zatwierdzen co reszta.
+    """
+    records = [
+        {"campaignId": str(cid), "dynamicBidding": {"strategy": str(strategy)}}
+        for cid, strategy in pairs
+    ]
+    return update(client, "campaign", records)
+
+
 def add_negative_keywords(
     client: AdsClient,
     items: Iterable[dict[str, Any]],

@@ -18,6 +18,7 @@ import { useParams } from "next/navigation";
 import { useMemo, useState } from "react";
 import { ProductsTab } from "@/components/ProductsTab";
 import { AddNegatives } from "@/components/AddNegatives";
+import { AddTargets } from "@/components/AddTargets";
 import { BulkBar, useBulkAction } from "@/components/BulkBar";
 import { DataTable } from "@/components/DataTable";
 import { SuggestionCell } from "@/components/SuggestionCell";
@@ -66,7 +67,13 @@ export default function CampaignDetailPage() {
   // Modyfikatory placementow zmienione recznie, jeszcze niewyslane
   const [modDrafts, setModDrafts] = useState<Map<string, number>>(new Map());
   // Recznie zmienione stawki keywordow i targetow tej kampanii
+  // Lista strategii pochodzi z backendu, zeby panel i zadanie do Amazona
+  // nie mogly sie rozjechac przy dopisaniu nowej.
+  const strategie = useData(["bidding-strategies"], () => api.biddingStrategies());
   const [bidDrafts, setBidDrafts] = useState<Map<string, number>>(new Map());
+  // Stawka domyslna grupy reklam - edytowana tak samo jak stawki targetow,
+  // przez wersje robocza i pasek zatwierdzenia, a nie zapisem wprost.
+  const [groupBidDrafts, setGroupBidDrafts] = useState<Map<string, number>>(new Map());
   // Zaznaczone grupy reklam - do wstrzymania albo wznowienia
   const [selectedGroups, setSelectedGroups] = useState<Set<string>>(new Set());
   // Zaznaczone reklamy produktowe - do wstrzymania albo wznowienia
@@ -89,6 +96,7 @@ export default function CampaignDetailPage() {
   // pobierac ich, jesli patrzysz na grupy reklam
   const adGroups = useData(["cd-adgroups", id, params, revision, tab], () =>
     tab === "adgroups" || tab === "products" || tab === "negatives"
+    || tab === "targeting"
       ? api.adGroups({ ...params, campaign_id: id })
       : Promise.resolve([]),
   );
@@ -245,11 +253,31 @@ export default function CampaignDetailPage() {
         accessorKey: "default_bid",
         header: "Stawka domyślna",
         meta: { align: "right" },
-        cell: (x: any) => money(x.getValue(), currency),
+        cell: (x: any) => {
+          const r = x.row.original;
+          const gid = String(r.ad_group_id);
+          return (
+            <EditableNumber
+              value={x.getValue()}
+              draft={groupBidDrafts.get(gid)}
+              onChange={(v) => setGroupBidDrafts((m) => new Map(m).set(gid, v))}
+              onReset={() =>
+                setGroupBidDrafts((m) => {
+                  const next = new Map(m);
+                  next.delete(gid);
+                  return next;
+                })
+              }
+              format={(v) => money(v, currency)}
+              min={0.02}
+              max={100}
+            />
+          );
+        },
       },
       ...metricColumns({ currency }),
     ],
-    [currency],
+    [currency, groupBidDrafts],
   );
 
   const productColumns = useMemo(
@@ -479,6 +507,15 @@ export default function CampaignDetailPage() {
     [],
   );
 
+  function submitGroupBids() {
+    const items = [...groupBidDrafts.entries()].map(([ad_group_id, bid]) => ({
+      ad_group_id,
+      bid,
+    }));
+    if (!items.length) return;
+    bulk.preview(() => api.planDefaultBids(profileId!, items));
+  }
+
   function submitBids() {
     const byId = new Map((targets.data ?? []).map((r) => [r.target_id, r]));
     const changes = [...bidDrafts.entries()]
@@ -554,12 +591,34 @@ export default function CampaignDetailPage() {
                   <span className="text-muted">
                     budżet {money(c.budget, c.currency ?? currency)} / dzień
                   </span>
-                  {c.bidding_strategy && (
+                  {c.ad_product === "SP" && (
                     <>
                       <span className="text-muted">·</span>
-                      <span className="text-muted">
-                        {c.bidding_strategy.replace("LEGACY_FOR_", "")}
-                      </span>
+                      {/* Strategia licytacji decyduje o tym, jak Amazon traktuje
+                          KAZDA stawke w kampanii - takze modyfikatory placementow.
+                          Panel pokazywal ja od poczatku i nie pozwalal ruszyc. */}
+                      <select
+                        value={c.bidding_strategy ?? ""}
+                        disabled={profileId === null || bulk.busy}
+                        onChange={(e) => {
+                          const strategy = e.target.value;
+                          if (!strategy || strategy === c.bidding_strategy) return;
+                          bulk.preview(() =>
+                            api.planBiddingStrategy(profileId!, [
+                              { campaign_id: id, strategy },
+                            ]),
+                          );
+                        }}
+                        className="rounded-md border border-border bg-surface px-1.5 py-0.5 text-xs text-muted"
+                        title="Zmiana trafi do kolejki zatwierdzen, nie wprost do Amazona"
+                      >
+                        {!c.bidding_strategy && <option value="">strategia…</option>}
+                        {(strategie.data ?? []).map((s) => (
+                          <option key={s.value} value={s.value}>
+                            {s.label}
+                          </option>
+                        ))}
+                      </select>
                     </>
                   )}
                 </div>
@@ -643,16 +702,28 @@ export default function CampaignDetailPage() {
             }
           />
         ) : tab === "targeting" ? (
-          <DataTable
-            data={targets.data ?? []}
-            columns={targetColumns}
-            getRowId={(r) => r.target_id}
-            initialSort={[{ id: "cost", desc: true }]}
-            selected={selectedTargets}
-            onSelectedChange={setSelectedTargets}
-            emptyLabel="Brak targetowania w tym okresie"
-            maxHeight="calc(100vh - 32rem)"
-          />
+          <>
+            <DataTable
+              data={targets.data ?? []}
+              columns={targetColumns}
+              getRowId={(r) => r.target_id}
+              initialSort={[{ id: "cost", desc: true }]}
+              selected={selectedTargets}
+              onSelectedChange={setSelectedTargets}
+              emptyLabel="Brak targetowania w tym okresie"
+              maxHeight="calc(100vh - 38rem)"
+            />
+            <AddTargets
+              campaignId={id}
+              grupy={adGroups.data ?? []}
+              targety={targets.data ?? []}
+              canPlan={profileId !== null}
+              profileId={profileId}
+              onTargets={(items) =>
+                bulk.preview(() => api.planAddTargets(profileId!, items))
+              }
+            />
+          </>
         ) : tab === "terms" ? (
           <DataTable
             data={terms.data ?? []}
@@ -703,6 +774,20 @@ export default function CampaignDetailPage() {
           </>
         )}
       </Card>
+
+      {tab === "adgroups" && (
+        <DraftBar
+          count={groupBidDrafts.size}
+          label={
+            groupBidDrafts.size === 1
+              ? "zmieniona stawka domyślna"
+              : "zmienionych stawek domyślnych"
+          }
+          onDiscard={() => setGroupBidDrafts(new Map())}
+          onSubmit={submitGroupBids}
+          busy={bulk.busy}
+        />
+      )}
 
       {tab === "targeting" && (
         <DraftBar

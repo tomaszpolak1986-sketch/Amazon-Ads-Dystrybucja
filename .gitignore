@@ -4,6 +4,13 @@
 .env
 .env.*
 !.env.example
+# Reczne kopie kluczy obok repozytorium. Key.txt lezal w katalogu glownym
+# i `git add -A` wciagnal go do commita - przed wyslaniem wycofany, ale
+# raz wystarczy. Wzorce lapia typowe nazwy takich plikow.
+Key.txt
+key.txt
+*klucze*.txt
+*.env.kopia-*
 
 # --- srodowiska i zaleznosci ---
 .venv/

@@ -743,13 +743,22 @@ def sync_all(
     lookback_days: int = DEFAULT_LOOKBACK_DAYS,
     with_reports: bool = True,
 ) -> dict[str, Any]:
-    """Pelny sync: profile -> encje -> raporty reklamowe -> sprzedaz i FBA.
+    """Pelny sync: profile -> sprzedaz i FBA -> encje -> raporty reklamowe.
 
     Sprzedaz calkowita i podzial FBA sa czescia tego przebiegu, nie osobnym
     zadaniem: przycisk "Sync" ma dociagnac WSZYSTKO, co panel pokazuje.
     Wczesniej pobieral tylko reklamy, wiec TACOS i udzial FBA zostawaly w
     tyle az do najblizszego odswiezenia planowego - a to mylilo, bo data
     pod wykresem sprzedazy nie zmieniala sie po recznym kliknieciu.
+
+    KOLEJNOSC MA ZNACZENIE. Sprzedaz idzie PRZED raportami reklamowymi, bo
+    to dwa zrodla o zupelnie innym koszcie: sprzedaz to jeden raport na rynek,
+    gotowy w kilkanascie sekund, a raporty reklamowe to obchod wszystkich
+    rynkow, ktory potrafi zajac godziny (Amazon generuje je po kilka-kilkanascie
+    minut kazdy). Gdy sprzedaz stala na koncu, wystarczylo, ze obchod byl wolny
+    albo sie wywrocil, a mianownik TACOS po cichu starzal sie mimo ze dane
+    lezaly gotowe do pobrania. Tak bylo 10.11.2026: reklamy mialy komplet,
+    sprzedazy brakowal dzien, a Amazon mial go od reki.
 
     Okno sprzedazy jest to samo co reklam. Jeden raport na rynek niezaleznie
     od dlugosci okna (limit to 60 dni), wiec 14 dni kosztuje tyle samo
@@ -767,20 +776,10 @@ def sync_all(
     start = end - dt.timedelta(days=lookback_days - 1)
 
     summary: dict[str, Any] = {}
-    for pid in targets:
-        entry: dict[str, Any] = {}
-        try:
-            entry["entities"] = sync_entities(pid)
-            if with_reports:
-                entry["reports"] = sync_reports(pid, start, end)
-        except Exception as exc:
-            log.exception("Sync profilu %s nie powiodl sie", pid)
-            entry["error"] = str(exc)
-        summary[str(pid)] = entry
 
-    # Sprzedaz calkowita (mianownik TACOS) i podzial FBA - tylko gdy SP-API
-    # jest skonfigurowane. Bez kluczy te dwa zrodla po prostu nie istnieja
-    # i panel dziala na samych reklamach.
+    # --- najpierw to, co tanie: sprzedaz calkowita i podzial FBA ---
+    # Tylko gdy SP-API jest skonfigurowane. Bez kluczy te dwa zrodla po
+    # prostu nie istnieja i panel dziala na samych reklamach.
     if with_reports and settings.sp_configured:
         from . import orders_sync, sales_sync
 
@@ -798,4 +797,41 @@ def sync_all(
             log.exception("Sync podzialu FBA nie powiodl sie")
             summary["fulfillment"] = {"error": str(exc)[:300]}
 
+    # --- potem to, co dlugie: encje i raporty rynek po rynku ---
+    for pid in targets:
+        entry: dict[str, Any] = {}
+        try:
+            entry["entities"] = sync_entities(pid)
+            if with_reports:
+                if _ma_kampanie(pid):
+                    entry["reports"] = sync_reports(pid, start, end)
+                else:
+                    # Rynek bez ani jednej kampanii nie ma czego raportowac.
+                    # Zamawianie raportow dla takiego profilu to kilkanascie
+                    # minut czekania na pusty plik - a konto ma takie rynki
+                    # (PL, SE, TR nie mialy nigdy zadnej kampanii).
+                    log.info("Profil %s bez kampanii - pomijam raporty", pid)
+                    entry["reports"] = {"skipped": "brak kampanii"}
+        except Exception as exc:
+            log.exception("Sync profilu %s nie powiodl sie", pid)
+            entry["error"] = str(exc)
+        summary[str(pid)] = entry
+
     return summary
+
+
+def _ma_kampanie(profile_id: int) -> bool:
+    """Czy profil ma w bazie chocby jedna kampanie.
+
+    Pytamy baze, nie wynik `sync_entities` - ten zwraca liczbe ZMIENIONYCH
+    rekordow, wiec dla rynku o niezmienionym stanie wyszloby zero i raporty
+    zostalyby pominiete mimo dzialajacych kampanii.
+    """
+    with session_scope() as session:
+        return bool(
+            session.execute(
+                select(Campaign.campaign_id)
+                .where(Campaign.profile_id == int(profile_id))
+                .limit(1)
+            ).first()
+        )

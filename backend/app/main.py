@@ -53,12 +53,12 @@ def _scheduled_rules_tick() -> None:
 
 
 def _scheduled_sb_sd_refresh() -> None:
-    """Dobowe pobranie SB/SD - pod ta sama blokada, co reszta synchronizacji."""
-    try:
-        with sync_lock.przebieg("raporty SB/SD"):
-            _sb_sd_refresh_body()
-    except sync_lock.Zajete as exc:
-        log.info("SB/SD pominiete: %s", exc)
+    """Dobowe pobranie SB/SD.
+
+    Blokade bierze `_sb_sd_refresh_body` osobno dla kazdego rynku, nie tutaj
+    na caly przebieg - patrz komentarz tam.
+    """
+    _sb_sd_refresh_body()
 
 
 def _sb_sd_refresh_body() -> None:
@@ -103,21 +103,61 @@ def _sb_sd_refresh_body() -> None:
     log.info("SB/SD: start dobowego pobrania, %s..%s", start, end)
 
     for pid, kod in rynki:
-        # Encje najpierw - bez nich raporty nie maja do czego przypiac nazw.
-        # Kazdy rynek osobno, zeby jeden bledny nie zabral pozostalych.
-        for etykieta, krok in (
-            ("SB encje", lambda p=pid: sb_sync.sync_entities(p)),
-            ("SD encje", lambda p=pid: sd_sync.sync_entities(p)),
-            ("SB raporty", lambda p=pid: sb_sd_reports.sync_reports(p, "SB", start, end)),
-            ("SD raporty", lambda p=pid: sb_sd_reports.sync_reports(p, "SD", start, end)),
-        ):
-            try:
-                wynik = krok()
-                log.info("%s %s: %s", etykieta, kod, wynik)
-            except Exception:
-                log.exception("%s %s: nie powiodlo sie", etykieta, kod)
+        # BLOKADA NA RYNEK, NIE NA CALY PRZEBIEG. Wczesniej jedna blokada
+        # obejmowala wszystkie rynki i cztery kroki kazdego z nich, wiec
+        # przebieg trzymal ja godzinami. 10.11.2026 trzymal 3 godziny i nie
+        # zapisal ani jednego wiersza, a przez ten czas nie dalo sie dociagnac
+        # ani reklam, ani sprzedazy. Teraz miedzy rynkami blokada jest wolna
+        # i tansze zadania maja gdzie sie wcisnac.
+        try:
+            with sync_lock.przebieg(f"raporty SB/SD ({kod})"):
+                _sb_sd_jeden_rynek(pid, kod, start, end)
+        except sync_lock.Zajete as exc:
+            # Rynek przepada do jutra - i dobrze. Lepiej oddac kolejke
+            # tanszemu zadaniu niz blokowac je na godziny.
+            log.info("SB/SD %s pominiete: %s", kod, exc)
 
     log.info("SB/SD: dobowe pobranie zakonczone")
+
+
+def _sb_sd_jeden_rynek(pid: int, kod: str, start, end) -> None:
+    """Encje i raporty SB/SD dla jednego rynku."""
+    from sqlalchemy import select as _select
+
+    from .db import session_scope
+    from .etl import sb_sd_reports, sb_sync, sd_sync
+    from .models import Campaign
+
+    # Encje najpierw - bez nich raporty nie maja do czego przypiac nazw.
+    # Kazdy krok osobno, zeby jeden bledny nie zabral pozostalych.
+    for etykieta, krok in (
+        ("SB encje", lambda: sb_sync.sync_entities(pid)),
+        ("SD encje", lambda: sd_sync.sync_entities(pid)),
+    ):
+        try:
+            log.info("%s %s: %s", etykieta, kod, krok())
+        except Exception:
+            log.exception("%s %s: nie powiodlo sie", etykieta, kod)
+
+    # Raporty tylko tam, gdzie jest co raportowac. Zamowienie raportu kosztuje
+    # 20-60 minut czekania niezaleznie od tego, czy wroci z danymi, czy pusty -
+    # a wiekszosc rynkow nie ma ani jednej kampanii SB czy SD. Sprawdzamy PO
+    # synchronizacji encji, wiec nowa kampania zostanie zauwazona od razu.
+    for rodzaj in ("SB", "SD"):
+        with session_scope() as session:
+            sa = session.execute(
+                _select(Campaign.campaign_id)
+                .where(Campaign.profile_id == pid, Campaign.ad_product == rodzaj)
+                .limit(1)
+            ).first()
+        if not sa:
+            log.info("%s raporty %s: brak kampanii, pomijam", rodzaj, kod)
+            continue
+        try:
+            wynik = sb_sd_reports.sync_reports(pid, rodzaj, start, end)
+            log.info("%s raporty %s: %s", rodzaj, kod, wynik)
+        except Exception:
+            log.exception("%s raporty %s: nie powiodlo sie", rodzaj, kod)
 
 
 def _odswiez_kursy() -> None:
@@ -345,11 +385,8 @@ def _startup_catchup() -> None:
     _scheduled_data_refresh(od=od_luki)
 
     if brak_sb_sd:
-        try:
-            with sync_lock.przebieg("raporty SB/SD (nadrabianie)"):
-                _sb_sd_refresh_body()
-        except sync_lock.Zajete as exc:
-            log.info("SB/SD po starcie pominiete: %s", exc)
+        # Bez wlasnej blokady - `_sb_sd_refresh_body` bierze ja per rynek.
+        _sb_sd_refresh_body()
 
 
 def _najstarsza_luka(session, modele) -> dict:
@@ -1457,6 +1494,25 @@ def get_catalog_search(
     return queries.catalog_search(session, profile_id, q, limit)
 
 
+@app.get("/api/catalog/categories")
+def get_categories(
+    profile_id: int = Query(..., description="rynek, ktorego dotyczy slownik kategorii"),
+    q: str | None = Query(None, description="fragment nazwy kategorii"),
+    limit: int = Query(60, ge=1, le=200),
+    session: Session = Depends(get_session),
+):
+    """Kategorie do targetowania produktowego - ze slownika rynku."""
+    from .etl import labels as labels_etl
+    from .models import Profile
+
+    mp = session.execute(
+        select(Profile.marketplace_id).where(Profile.profile_id == profile_id)
+    ).scalar_one_or_none()
+    if not mp:
+        raise HTTPException(404, "Profil nie ma przypisanego marketplace")
+    return labels_etl.kategorie(session, mp, q, limit)
+
+
 @app.get("/api/catalog/brands")
 def get_brands(
     profile_id: int = Query(..., description="rynek, ktorego dotyczy slownik marek"),
@@ -1750,6 +1806,48 @@ class NegativeBrandItem(BaseModel):
     brandName: str | None = None
 
 
+class DefaultBidItem(BaseModel):
+    ad_group_id: str
+    bid: float
+
+
+class DefaultBidsRequest(BaseModel):
+    profile_id: int
+    items: list[DefaultBidItem]
+
+
+class BiddingStrategyItem(BaseModel):
+    campaign_id: str
+    # LEGACY_FOR_SALES | AUTO_FOR_SALES | MANUAL | RULE_BASED
+    strategy: str
+
+
+class BiddingStrategyRequest(BaseModel):
+    profile_id: int
+    items: list[BiddingStrategyItem]
+
+
+class AddTargetItem(BaseModel):
+    campaignId: str
+    adGroupId: str
+    # Kategoria jest obowiazkowa: Amazon traktuje marke, cene i ocene jako
+    # ZAWEZENIA kategorii, nie jako samodzielny cel.
+    categoryId: str
+    categoryName: str | None = None
+    brandId: str | None = None
+    brandName: str | None = None
+    # "4-5", "3-5" albo "1-5"; inne wartosci plan pomija.
+    rating: str | None = None
+    priceFrom: float | None = None
+    priceTo: float | None = None
+    bid: float | None = None
+
+
+class AddTargetsRequest(BaseModel):
+    profile_id: int
+    items: list[AddTargetItem]
+
+
 class NegativeAsinRequest(BaseModel):
     profile_id: int
     items: list[NegativeAsinItem] = []
@@ -1770,6 +1868,66 @@ def post_negative_targets(
     if not pozycje:
         raise HTTPException(400, "Nie podano ani ASIN-ow, ani marek")
     result = actions.plan_negative_targets(session, req.profile_id, pozycje)
+    session.commit()
+    return result
+
+
+@app.get("/api/catalog/bidding-strategies")
+def get_bidding_strategies():
+    """Strategie licytacji, ktore Amazon przyjmuje - z czytelnymi nazwami."""
+    from .ads import entities
+
+    return [{"value": k, "label": v} for k, v in entities.STRATEGIE.items()]
+
+
+@app.post("/api/actions/default-bids")
+def post_default_bids(req: DefaultBidsRequest, session: Session = Depends(get_session)):
+    """Liczy plan zmiany stawki domyslnej grup reklam. Nie wysyla nic do Amazona.
+
+    Stawka domyslna dotyczy kazdego targetu i keyworda bez wlasnej stawki -
+    czyli kazdego nowo zalozonego. Panel pokazywal ja od poczatku i nie
+    pozwalal ruszyc.
+    """
+    if not req.items:
+        raise HTTPException(400, "Nie podano zadnej grupy reklam")
+    result = actions.plan_default_bids(
+        session, req.profile_id, [i.model_dump() for i in req.items]
+    )
+    session.commit()
+    return result
+
+
+@app.post("/api/actions/bidding-strategy")
+def post_bidding_strategy(
+    req: BiddingStrategyRequest, session: Session = Depends(get_session)
+):
+    """Liczy plan zmiany strategii licytacji kampanii. Nie wysyla nic do Amazona.
+
+    Strategia zmienia sposob, w jaki Amazon traktuje KAZDA stawke w kampanii,
+    wiec jej skutek jest szerszy niz pojedynczej korekty.
+    """
+    if not req.items:
+        raise HTTPException(400, "Nie podano zadnej kampanii")
+    result = actions.plan_bidding_strategy(
+        session, req.profile_id, [i.model_dump() for i in req.items]
+    )
+    session.commit()
+    return result
+
+
+@app.post("/api/actions/targets")
+def post_add_targets(req: AddTargetsRequest, session: Session = Depends(get_session)):
+    """Liczy plan dodania targetow produktowych. Nie wysyla nic do Amazona.
+
+    Target powstaje w ISTNIEJACEJ grupie reklam. Dotad panel potrafil zalozyc
+    targetowanie wylacznie razem z cala nowa kampania, wiec dodanie jednej
+    marki do grupy, ktora juz dziala, wymagalo wejscia do konsoli Amazona.
+    """
+    if not req.items:
+        raise HTTPException(400, "Nie podano zadnego targetu")
+    result = actions.plan_add_targets(
+        session, req.profile_id, [i.model_dump() for i in req.items]
+    )
     session.commit()
     return result
 

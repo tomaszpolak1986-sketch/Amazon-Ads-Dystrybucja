@@ -42,6 +42,10 @@ export interface SuggestionAction {
 }
 
 export interface SuggestionRow {
+  /** Ile pieniedzy stoi za ta sugestia, w przeliczeniu na 30 dni.
+   *  Dla strat: wydatek ponad prog rentownosci. Dla okazji: niewykorzystany
+   *  zapas, czyli ile mozna jeszcze wydac zostajac w progu - nie zysk. */
+  impact?: number | null;
   scope: "CAMPAIGN" | "TARGET" | "PLACEMENT" | "SEARCH_TERM" | "PRODUCT";
   entity_id: string;
   entity_name: string | null;
@@ -233,6 +237,16 @@ export interface EffectivenessResult {
     median_acos_delta: number | null;
     median_cost_delta: number | null;
   }>;
+  /** Rozliczenie panelu z wlasnych rekomendacji - nastepstwo w czasie,
+   *  nie dowod przyczyny. Ocena zalezy od kierunku zmiany. */
+  scorecard?: {
+    measured: number;
+    better: number;
+    worse: number;
+    flat: number;
+    waiting: number;
+    noise_band: number;
+  };
 }
 
 /** Nagla zmiana w kampanii wzgledem jej wlasnej normy. */
@@ -583,6 +597,9 @@ export interface TargetRow extends Metrics {
   bid: number | null;
   state: string | null;
   suggestions?: Suggestion[];
+  /** Surowa kategoria targetu produktowego - potrzebna, zeby dolozyc do niej marke. */
+  category_id?: string | null;
+  category_name?: string | null;
 }
 
 export interface SearchTermRow extends Metrics {
@@ -605,6 +622,8 @@ export interface CampaignDetail extends Metrics {
   name: string | null;
   state: string | null;
   targeting_type: string | null;
+  /** SP | SB | SD - decyduje, ktore ustawienia sa w ogole dostepne. */
+  ad_product: string | null;
   budget: number | null;
   budget_type: string | null;
   bidding_strategy: string | null;
@@ -648,6 +667,13 @@ export interface NegativeKeywordRow {
   campaign_name: string | null;
   ad_group_name: string | null;
   country: string | null;
+}
+
+export interface CategoryRow {
+  category_id: string;
+  name: string;
+  /** Kategoria nadrzedna - Amazon ma galezie o identycznej nazwie liscia. */
+  parent: string;
 }
 
 export interface NegativeTargetRow {
@@ -1173,8 +1199,35 @@ export const api = {
     profile_id: number,
     brands: Array<{ campaignId: string; adGroupId: string; brandId: string; brandName?: string }>,
   ) => apiPost<ActionResult>("/api/actions/negative-targets", { profile_id, brands }),
+  planDefaultBids: (
+    profile_id: number,
+    items: Array<{ ad_group_id: string; bid: number }>,
+  ) => apiPost<ActionResult>("/api/actions/default-bids", { profile_id, items }),
+  planBiddingStrategy: (
+    profile_id: number,
+    items: Array<{ campaign_id: string; strategy: string }>,
+  ) => apiPost<ActionResult>("/api/actions/bidding-strategy", { profile_id, items }),
+  biddingStrategies: () =>
+    apiGet<Array<{ value: string; label: string }>>("/api/catalog/bidding-strategies"),
+  planAddTargets: (
+    profile_id: number,
+    items: Array<{
+      campaignId: string;
+      adGroupId: string;
+      categoryId: string;
+      categoryName?: string;
+      brandId?: string;
+      brandName?: string;
+      rating?: string;
+      priceFrom?: number;
+      priceTo?: number;
+      bid?: number;
+    }>,
+  ) => apiPost<ActionResult>("/api/actions/targets", { profile_id, items }),
   brands: (profile_id: number, q?: string) =>
     apiGet<BrandRow[]>("/api/catalog/brands", { profile_id, q }),
+  categories: (profile_id: number, q?: string) =>
+    apiGet<CategoryRow[]>("/api/catalog/categories", { profile_id, q }),
   refreshBrands: (profile_id: number) =>
     apiPost<{ categories: number; brands: number }>("/api/catalog/brands/refresh", null, { profile_id }),
   planNegatives: (

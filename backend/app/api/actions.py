@@ -131,6 +131,32 @@ def _create_plan(
     # tydzien. Kolejka sugestii nadpisuje te klucze swoimi, gdy je ma.
     if "suggestion_keys" not in payload:
         payload = {**payload, "suggestion_keys": _klucze_z_planu(kind, payload, planned)}
+
+    # Ta sama zmiana nie zaklada drugiego planu. Gdy wysylka do Amazona
+    # zawiedzie, naturalnym odruchem jest kliknac jeszcze raz - a plan
+    # powstawal poprawnie za kazdym razem, wiec w kolejce ladowaly cztery
+    # identyczne wpisy i trzeba bylo trzy kasowac recznie. Zamiast tworzyc
+    # kolejny, oddajemy ten, ktory juz czeka.
+    odcisk = _odcisk_planu(kind, planned)
+    istniejacy = _czekajacy_blizniak(session, profile_id, kind, odcisk)
+    if istniejacy is not None:
+        log.info("Plan %s (%s): identyczny juz czeka w kolejce, nie zakladam drugiego",
+                 istniejacy.id, kind)
+        names = _entity_names(session, planned)
+        context = _entity_context(session, planned)
+        return {
+            "requires_confirmation": True,
+            "plan_id": istniejacy.id,
+            "kind": kind,
+            "summary": istniejacy.summary,
+            "planned": [_describe_item(item, names, context) for item in planned],
+            "item_count": istniejacy.item_count,
+            "expires_at": iso_utc(istniejacy.expires_at),
+            "applied": 0,
+            "failed": 0,
+            "duplicate_of_pending": True,
+        }
+
     plan = PendingPlan(
         id=str(uuid.uuid4()),
         profile_id=profile_id,
@@ -164,6 +190,39 @@ def _create_plan(
         "applied": 0,
         "failed": 0,
     }
+
+
+def _odcisk_planu(kind: str, planned: list[dict[str, Any]]) -> tuple:
+    """Co czyni dwa plany tym samym zadaniem: rodzaj, obiekty i wartosci docelowe.
+
+    Wartosc WYJSCIOWA celowo nie wchodzi do odcisku - przy drugim liczeniu
+    moze byc juz inna (ktos zmienil stawke recznie), a zadanie to nadal to
+    samo zadanie.
+    """
+    pozycje = sorted(
+        (str(p.get("entity_type") or ""), str(p.get("id") or ""),
+         str(p.get("field") or ""), str(p.get("new") if p.get("new") is not None else ""))
+        for p in planned
+    )
+    return (kind, tuple(pozycje))
+
+
+def _czekajacy_blizniak(
+    session: Session, profile_id: int, kind: str, odcisk: tuple
+) -> PendingPlan | None:
+    """Plan PENDING o tym samym odcisku - albo None."""
+    kandydaci = session.execute(
+        select(PendingPlan).where(
+            PendingPlan.status == "PENDING",
+            PendingPlan.profile_id == profile_id,
+            PendingPlan.kind == kind,
+        )
+    ).scalars().all()
+    for plan in kandydaci:
+        inne = (plan.payload or {}).get("planned") or []
+        if _odcisk_planu(plan.kind, inne) == odcisk:
+            return plan
+    return None
 
 
 def _klucze_z_planu(kind: str, payload: dict[str, Any], planned: list[dict[str, Any]]) -> list[str]:
@@ -389,6 +448,9 @@ def apply_plan(
         "remove_negatives": _execute_remove_negatives,
         "product_ads": _execute_product_ads,
         "add_products": _execute_add_products,
+        "add_targets": _execute_add_targets,
+        "default_bids": _execute_default_bids,
+        "bidding_strategy": _execute_bidding_strategy,
         "create_campaign": _execute_create_campaign,
     }
     executor = executors.get(plan.kind)
@@ -738,7 +800,7 @@ def plan_remove_negatives(
     ) if kw else {}
     wyrazenia = dict(
         session.execute(
-            select(NegativeTarget.target_id, NegativeTarget.resolved_expression)
+            select(NegativeTarget.target_id, NegativeTarget.value)
             .where(NegativeTarget.target_id.in_(tg))
         ).all()
     ) if tg else {}
@@ -1214,7 +1276,24 @@ PLACEMENT_LABEL = {
     "PLACEMENT_TOP": "Góra wyników",
     "PLACEMENT_REST_OF_SEARCH": "Reszta wyników",
     "PLACEMENT_PRODUCT_PAGE": "Karta produktu",
+    "SITE_AMAZON_BUSINESS": "Amazon Business",
+    "Off Amazon": "Poza Amazonem",
 }
+
+# Placementy, ktorym Amazon pozwala ustawic modyfikator. Raport wyswietlen zna
+# ICH WIECEJ niz zapis kampanii: wiersz "Off Amazon" (emisja poza Amazonem)
+# pokazuje sie w wynikach, ale przy zapisie konczy sie bledem
+#
+#   INVALID_ARGUMENT: Value 'Off Amazon' ... failed to satisfy constraint:
+#   Member must satisfy enum value set: [SITE_AMAZON_BUSINESS,
+#   PLACEMENT_PRODUCT_PAGE, PLACEMENT_TOP, PLACEMENT_REST_OF_SEARCH]
+#
+# a poniewaz Amazon nadpisuje CALY zestaw placementBidding naraz, jeden obcy
+# element wywracal cale zadanie - razem ze zmianami, ktore byly poprawne.
+PLACEMENTY_ZAPISYWALNE = frozenset({
+    "PLACEMENT_TOP", "PLACEMENT_REST_OF_SEARCH",
+    "PLACEMENT_PRODUCT_PAGE", "SITE_AMAZON_BUSINESS",
+})
 
 
 def plan_placements(
@@ -1234,9 +1313,28 @@ def plan_placements(
     planned: list[dict[str, Any]] = []
     items: list[dict[str, Any]] = []
 
+    pominiete: list[dict[str, Any]] = []
+
     for ch in changes:
         cid = str(ch["campaign_id"])
-        moved = [p for p in ch["placements"] if round(p.get("old") or 0) != round(p["new"])]
+        # Do zapisu bierzemy wylacznie placementy, ktore Amazon przyjmuje.
+        # Reszta jest tylko wierszem w raporcie - zostawiona w zadaniu
+        # przewraca je w calosci.
+        zapisywalne = [
+            p for p in ch["placements"] if p["placement"] in PLACEMENTY_ZAPISYWALNE
+        ]
+        for p in ch["placements"]:
+            if p["placement"] in PLACEMENTY_ZAPISYWALNE:
+                continue
+            if round(p.get("old") or 0) != round(p["new"]):
+                pominiete.append({
+                    "keyword": PLACEMENT_LABEL.get(p["placement"], p["placement"]),
+                    "reason": (
+                        "Amazon nie pozwala ustawić modyfikatora dla tego miejsca "
+                        "emisji - widać je w raporcie, ale nie da się nim sterować."
+                    ),
+                })
+        moved = [p for p in zapisywalne if round(p.get("old") or 0) != round(p["new"])]
         if not moved:
             continue
         for p in moved:
@@ -1256,15 +1354,31 @@ def plan_placements(
             "campaignId": cid,
             "strategy": ch.get("strategy") or "LEGACY_FOR_SALES",
             "placements": [
-                {"placement": p["placement"], "percentage": p["new"]} for p in ch["placements"]
+                {"placement": p["placement"], "percentage": p["new"]} for p in zapisywalne
             ],
         })
 
-    return _create_plan(
+    if not items:
+        # Pusty plan nie ma czego zatwierdzac, a w kolejce wyglada jak zadanie
+        # do zrobienia. Oddajemy same powody.
+        return {
+            "requires_confirmation": False,
+            "plan_id": None,
+            "kind": "placements",
+            "summary": (
+                f"Nie ma czego zmienic - {len(pominiete)} pozycji pominietych"
+                if pominiete else "Nie ma czego zmienic"
+            ),
+            "planned": [],
+            "skipped": pominiete,
+        }
+
+    wynik = _create_plan(
         session, profile_id, "placements",
         f"Modyfikatory placementow w {len(items)} kampaniach",
         {"items": items}, planned, source, rule_id,
     )
+    return {**wynik, "skipped": pominiete}
 
 
 def plan_product_ads(
@@ -1606,6 +1720,263 @@ def plan_negative_targets(
         "Wykluczenie " + " i ".join(czesci or ["0 pozycji"]),
         {}, planned, source, rule_id,
     )
+
+OCENY = {"4-5": "4-5", "3-5": "3-5", "1-5": "1-5"}
+
+
+def plan_add_targets(
+    session: Session,
+    profile_id: int,
+    items: Iterable[dict[str, Any]],
+    *,
+    source: str = "MANUAL",
+    rule_id: int | None = None,
+) -> dict[str, Any]:
+    """items: [{campaignId, adGroupId, categoryId, categoryName?, brandId?,
+    brandName?, rating?, priceFrom?, priceTo?, bid?}]
+
+    Targetowanie produktowe celuje w KATEGORIE, opcjonalnie zawezona do marki,
+    oceny i ceny - dokladnie tak, jak wygladaja pozycje juz istniejace na
+    koncie. Sama marka bez kategorii nie jest poprawnym targetem: Amazon
+    traktuje ASIN_BRAND_SAME_AS jako zawezenie kategorii, nie jako cel sam
+    w sobie, i odrzuca takie wyrazenie.
+
+    Nazwy marki i kategorii wozimy obok identyfikatorow wylacznie po to, zeby
+    w kolejce zatwierdzen nie staly gole numery.
+    """
+    items = [dict(it) for it in items]
+    planned: list[dict[str, Any]] = []
+    pominiete: list[dict[str, Any]] = []
+
+    istniejace = {
+        (str(ag), json.dumps(e, sort_keys=True))
+        for ag, e in session.execute(
+            select(Target.ad_group_id, Target.expression)
+            .where(Target.profile_id == profile_id, Target.state != "ARCHIVED")
+        ).all()
+        if e
+    }
+
+    for it in items:
+        kategoria = str(it.get("categoryId") or "").strip()
+        nazwa_kat = it.get("categoryName") or kategoria
+        marka = str(it.get("brandId") or "").strip()
+        nazwa_marki = it.get("brandName")
+
+        if not kategoria:
+            pominiete.append({
+                "keyword": nazwa_marki or marka or "(bez kategorii)",
+                "reason": (
+                    "Targetowanie produktowe wymaga kategorii. Sama marka nie jest "
+                    "celem - Amazon traktuje ja jako zawezenie kategorii."
+                ),
+            })
+            continue
+
+        wyrazenie: list[dict[str, str]] = [
+            {"type": "ASIN_CATEGORY_SAME_AS", "value": kategoria}
+        ]
+        opis = ["kategoria " + str(nazwa_kat)]
+        if marka:
+            wyrazenie.append({"type": "ASIN_BRAND_SAME_AS", "value": marka})
+            opis.append("marka " + str(nazwa_marki or marka))
+        ocena = str(it.get("rating") or "").strip()
+        if ocena in OCENY:
+            wyrazenie.append({"type": "ASIN_REVIEW_RATING_BETWEEN", "value": OCENY[ocena]})
+            opis.append("ocena " + OCENY[ocena])
+        od = it.get("priceFrom")
+        if od not in (None, ""):
+            wyrazenie.append({"type": "ASIN_PRICE_GREATER_THAN", "value": str(od)})
+            opis.append("cena powyzej " + str(od))
+        do = it.get("priceTo")
+        if do not in (None, ""):
+            wyrazenie.append({"type": "ASIN_PRICE_LESS_THAN", "value": str(do)})
+            opis.append("cena ponizej " + str(do))
+
+        klucz = (str(it.get("adGroupId")), json.dumps(wyrazenie, sort_keys=True))
+        if klucz in istniejace:
+            pominiete.append({
+                "keyword": " + ".join(opis),
+                "reason": "Taki target juz istnieje w tej grupie reklam.",
+            })
+            continue
+        istniejace.add(klucz)
+
+        stawka = it.get("bid")
+        planned.append({
+            "id": str(it.get("adGroupId") or ""),
+            "entity_type": "TARGET",
+            "field": "product_target",
+            "old": None,
+            "new": " + ".join(opis) + (
+                " - stawka " + str(round(float(stawka), 2)) if stawka is not None
+                else " - stawka domyslna grupy"
+            ),
+            "item": {
+                "campaignId": str(it.get("campaignId") or ""),
+                "adGroupId": str(it.get("adGroupId") or ""),
+                "expression": wyrazenie,
+                **({"bid": round(float(stawka), 2)} if stawka is not None else {}),
+            },
+        })
+
+    if not planned:
+        return {
+            "requires_confirmation": False,
+            "plan_id": None,
+            "kind": "add_targets",
+            "summary": (
+                "Nie ma czego dodac - " + str(len(pominiete)) + " pozycji pominietych"
+                if pominiete else "Nie ma czego dodac"
+            ),
+            "planned": [],
+            "skipped": pominiete,
+        }
+
+    wynik = _create_plan(
+        session, profile_id, "add_targets",
+        "Dodanie " + str(len(planned)) + " targetow produktowych",
+        {}, planned, source, rule_id,
+    )
+    return {**wynik, "skipped": pominiete}
+
+
+def plan_default_bids(
+    session: Session,
+    profile_id: int,
+    pairs: Iterable[dict[str, Any]],
+    *,
+    source: str = "MANUAL",
+    rule_id: int | None = None,
+) -> dict[str, Any]:
+    """pairs: [{ad_group_id, bid}] - stawka domyslna grupy reklam."""
+    pozycje = [dict(p) for p in pairs]
+    ids = [str(p["ad_group_id"]) for p in pozycje]
+    stare = dict(
+        session.execute(
+            select(AdGroup.ad_group_id, AdGroup.default_bid).where(
+                AdGroup.ad_group_id.in_(ids)
+            )
+        ).all()
+    )
+    nazwy = dict(
+        session.execute(
+            select(AdGroup.ad_group_id, AdGroup.name).where(AdGroup.ad_group_id.in_(ids))
+        ).all()
+    )
+
+    planned: list[dict[str, Any]] = []
+    pominiete: list[dict[str, Any]] = []
+    for poz in pozycje:
+        gid = str(poz["ad_group_id"])
+        lo, hi = zakres_stawki("SP")
+        try:
+            nowa = round(float(poz.get("bid")), 2)
+        except (TypeError, ValueError):
+            nowa = None
+        if nowa is not None and not lo <= nowa <= hi:
+            nowa = None
+        stara = stare.get(gid)
+        if nowa is None:
+            pominiete.append({
+                "keyword": nazwy.get(gid) or gid,
+                "reason": (
+                    "Stawka musi miescic sie w zakresie "
+                    + str(zakres_stawki("SP")[0]) + "-" + str(zakres_stawki("SP")[1])
+                    + " dla Sponsored Products."
+                ),
+            })
+            continue
+        if stara is not None and round(float(stara), 2) == nowa:
+            pominiete.append({
+                "keyword": nazwy.get(gid) or gid,
+                "reason": "Ta grupa ma juz taka stawke domyslna.",
+            })
+            continue
+        planned.append({
+            "id": gid,
+            "entity_type": "AD_GROUP",
+            "field": "default_bid",
+            "old": stara,
+            "new": nowa,
+            "item": {"adGroupId": gid, "defaultBid": nowa},
+        })
+
+    if not planned:
+        return {
+            "requires_confirmation": False, "plan_id": None, "kind": "default_bids",
+            "summary": "Nie ma czego zmienic", "planned": [], "skipped": pominiete,
+        }
+    wynik = _create_plan(
+        session, profile_id, "default_bids",
+        "Stawka domyslna w " + str(len(planned)) + " grupach reklam",
+        {}, planned, source, rule_id,
+    )
+    return {**wynik, "skipped": pominiete}
+
+
+def plan_bidding_strategy(
+    session: Session,
+    profile_id: int,
+    pairs: Iterable[dict[str, Any]],
+    *,
+    source: str = "MANUAL",
+    rule_id: int | None = None,
+) -> dict[str, Any]:
+    """pairs: [{campaign_id, strategy}] - strategia licytacji kampanii."""
+    pozycje = [dict(p) for p in pairs]
+    ids = [str(p["campaign_id"]) for p in pozycje]
+    stare = dict(
+        session.execute(
+            select(Campaign.campaign_id, Campaign.bidding_strategy).where(
+                Campaign.campaign_id.in_(ids)
+            )
+        ).all()
+    )
+    nazwy = dict(
+        session.execute(
+            select(Campaign.campaign_id, Campaign.name).where(Campaign.campaign_id.in_(ids))
+        ).all()
+    )
+
+    planned: list[dict[str, Any]] = []
+    pominiete: list[dict[str, Any]] = []
+    for poz in pozycje:
+        cid = str(poz["campaign_id"])
+        nowa = str(poz.get("strategy") or "").upper()
+        if nowa not in entities.STRATEGIE:
+            pominiete.append({
+                "keyword": nazwy.get(cid) or cid,
+                "reason": "Amazon nie zna takiej strategii licytacji.",
+            })
+            continue
+        if (stare.get(cid) or "").upper() == nowa:
+            pominiete.append({
+                "keyword": nazwy.get(cid) or cid,
+                "reason": "Ta kampania ma juz taka strategie.",
+            })
+            continue
+        planned.append({
+            "id": cid,
+            "entity_type": "CAMPAIGN",
+            "field": "bidding_strategy",
+            "old": entities.STRATEGIE.get(stare.get(cid) or "", stare.get(cid)),
+            "new": entities.STRATEGIE[nowa],
+            "item": {"campaignId": cid, "strategy": nowa},
+        })
+
+    if not planned:
+        return {
+            "requires_confirmation": False, "plan_id": None, "kind": "bidding_strategy",
+            "summary": "Nie ma czego zmienic", "planned": [], "skipped": pominiete,
+        }
+    wynik = _create_plan(
+        session, profile_id, "bidding_strategy",
+        "Strategia licytacji w " + str(len(planned)) + " kampaniach",
+        {}, planned, source, rule_id,
+    )
+    return {**wynik, "skipped": pominiete}
+
 
 # --------------------------------------------------------------------------- #
 # Krok 2: wykonanie (prywatne - wylacznie przez apply_plan)
@@ -2050,8 +2421,94 @@ def _execute_harvest(session, profile_id, payload, planned, source, rule_id):
     return {"applied": applied, "failed": failed, "errors": bledy, "planned": planned}
 
 
+def _execute_add_targets(session, profile_id, payload, planned, source, rule_id):
+    """Zaklada targety produktowe w istniejacych grupach reklam."""
+    items = [p["item"] for p in planned]
+    # Amazon przyjmuje jedna grupe reklam na zadanie, wiec grupujemy po niej.
+    po_grupie: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for it in items:
+        po_grupie.setdefault((it["campaignId"], it["adGroupId"]), []).append(it)
+
+    applied = 0
+    bledy: list[str] = []
+    with AdsClient(profile_id=profile_id) as client:
+        for (cid, agid), grupa in po_grupie.items():
+            wynik = entities.create_product_targets(client, cid, agid, grupa)
+            applied += len(wynik.get("success") or [])
+            blad = _first_error(wynik, "Amazon odrzucil target")
+            if blad:
+                bledy.append(blad)
+            # Dopisujemy lokalnie, zeby panel pokazal nowy target od razu,
+            # a nie dopiero po najblizszej synchronizacji encji.
+            for it, nowy_id in _sparuj_z_odpowiedzia(grupa, wynik, "targetId"):
+                if session.get(Target, nowy_id):
+                    continue
+                session.add(Target(
+                    target_id=nowy_id,
+                    ad_group_id=agid,
+                    campaign_id=cid,
+                    profile_id=profile_id,
+                    ad_product="SP",
+                    expression_type="MANUAL",
+                    expression=it["expression"],
+                    state="ENABLED",
+                    bid=it.get("bid"),
+                ))
+
+    st = "APPLIED" if not bledy else ("PARTIAL" if applied else "FAILED")
+    for p in planned:
+        _log_change(
+            session, profile_id, "TARGET", p["id"], "product_target", None, p["new"],
+            source, st, rule_id, bledy[0] if bledy else None,
+        )
+
+    return {"applied": applied, "failed": len(planned) - applied,
+            "errors": bledy, "planned": planned}
+
+
+def _execute_default_bids(session, profile_id, payload, planned, source, rule_id):
+    pary = [(p["id"], p["new"]) for p in planned]
+    with AdsClient(profile_id=profile_id) as client:
+        ok_ids, errors = _split_results(
+            entities.set_ad_group_default_bids(client, pary), "adGroupId"
+        )
+
+    def local(p):
+        obj = session.get(AdGroup, p["id"])
+        if obj:
+            obj.default_bid = p["new"]
+
+    return _finalize(session, profile_id, planned, ok_ids, errors, source, rule_id, local)
+
+
+def _execute_bidding_strategy(session, profile_id, payload, planned, source, rule_id):
+    pary = [(p["id"], p["item"]["strategy"]) for p in planned]
+    with AdsClient(profile_id=profile_id) as client:
+        ok_ids, errors = _split_results(
+            entities.set_campaign_bidding_strategy(client, pary), "campaignId"
+        )
+
+    def local(p):
+        obj = session.get(Campaign, p["id"])
+        if obj:
+            obj.bidding_strategy = p["item"]["strategy"]
+
+    return _finalize(session, profile_id, planned, ok_ids, errors, source, rule_id, local)
+
+
 def _execute_placements(session, profile_id, payload, planned, source, rule_id):
-    items = payload.get("items", [])
+    # Filtr jest TAKZE tutaj, nie tylko przy liczeniu planu. Plany nie wygasaja,
+    # wiec w kolejce moze czekac taki policzony przed poprawka - z wierszem
+    # "Off Amazon", ktory Amazon odrzuca bledem 400 i wywraca cale zadanie.
+    # Bez tego trzeba by je kasowac recznie i liczyc od nowa.
+    items = [
+        {**it, "placements": [
+            p for p in it.get("placements", [])
+            if p.get("placement") in PLACEMENTY_ZAPISYWALNE
+        ]}
+        for it in payload.get("items", [])
+    ]
+    items = [it for it in items if it["placements"]]
     with AdsClient(profile_id=profile_id) as client:
         ok_ids, errors = _split_results(
             entities.set_placement_modifiers(client, items), "campaignId"

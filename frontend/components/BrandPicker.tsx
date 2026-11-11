@@ -21,11 +21,16 @@ export function BrandPicker({
   profileId,
   wybrane,
   onWybierz,
+  placeholder = "Szukaj marki do wykluczenia",
 }: {
   profileId: number | null;
   /** Identyfikatory marek juz dodanych - do oznaczenia "wybrana". */
   wybrane: Set<string>;
   onWybierz: (brandId: string, nazwa: string) => void;
+  /** Ta sama wyszukiwarka sluzy wykluczaniu I targetowaniu - a to dwie
+   *  przeciwne rzeczy. Domyslny tekst mowil "do wykluczenia" takze przy
+   *  dodawaniu targetu, czyli dokladnie odwrotnie, niz robil przycisk. */
+  placeholder?: string;
 }) {
   const [szukaj, setSzukaj] = useState("");
   const [otwarte, setOtwarte] = useState(false);
@@ -82,7 +87,7 @@ export function BrandPicker({
             setSzukaj(e.target.value);
             setOtwarte(true);
           }}
-          placeholder="Szukaj marki do wykluczenia"
+          placeholder={placeholder}
           className="w-full bg-transparent text-sm outline-none placeholder:text-muted"
         />
       </div>

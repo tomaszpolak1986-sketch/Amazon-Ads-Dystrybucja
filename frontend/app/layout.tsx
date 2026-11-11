@@ -16,7 +16,17 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
-    <html lang="pl" className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}>
+    // suppressHydrationWarning dotyczy WYLACZNIE atrybutow tego jednego
+    // elementu. Skrypt ponizej dopisuje `data-theme` do <html> jeszcze przed
+    // hydracja - bo inaczej strona mignelaby jasnym tlem komus, kto wybral
+    // ciemny motyw. Serwer tego atrybutu nie zna, wiec React zglasza
+    // rozbieznosc, choc jest zamierzona. Bez tej flagi w konsoli siedzi
+    // czerwony blad, ktory uczy ignorowac czerwone bledy.
+    <html
+      lang="pl"
+      suppressHydrationWarning
+      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+    >
       <head>
         {/* Przywraca zapisany motyw przed pierwszym malowaniem - bez tego
             strona mignelaby jasnym tlem u kogos, kto wybral ciemny. */}

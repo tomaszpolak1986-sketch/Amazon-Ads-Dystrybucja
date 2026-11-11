@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo } from "react";
+import { Scorecard } from "@/components/Scorecard";
 import { Anomalies } from "@/components/Anomalies";
 import { BulkBar, useBulkAction } from "@/components/BulkBar";
 import { TrendChart } from "@/components/TrendChart";
@@ -33,6 +34,11 @@ export default function OverviewPage() {
   );
   // Anomalie maja wlasne, stale okno - nie zaleza od filtra dat u gory,
   // bo pytanie brzmi "czy cos sie wlasnie zmienilo", a nie "jak bylo w maju".
+  // Rozliczenie zmian: ile wypadlo lepiej, ile gorzej. Osobne zapytanie, bo
+  // liczy sie z calej historii, a nie z wybranego okna dat.
+  const skutecznosc = useData(["effectiveness", profileId], () =>
+    api.effectiveness(profileId),
+  );
   const anomalies = useData(["anomalies", profileId, revision], () =>
     api.anomalies(profileId),
   );
@@ -172,6 +178,8 @@ export default function OverviewPage() {
           <TrendChart data={overview.data?.timeseries ?? []} currency={currency} />
         )}
       </Card>
+
+      <Scorecard data={skutecznosc.data} loading={skutecznosc.loading} />
 
       <Anomalies
         data={anomalies.data}

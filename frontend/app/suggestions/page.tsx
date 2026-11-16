@@ -266,6 +266,20 @@ export default function SuggestionsPage() {
                     wyswietlenia, klikniecia, zamowienia i CTR - czyli cztery
                     kolumny tej samej tabeli. Te same liczby dwa razy w wierszu
                     rozpychaly go tak, ze ACOS i wydatek wypadaly poza ekran. */}
+                {/* Ta sama fraza bywa warta przejecia w kilku kampaniach naraz
+                    i kazda z tych propozycji z osobna jest sensowna. Dopiero
+                    zatwierdzenie wszystkich ustawia kampanie do licytacji
+                    przeciwko sobie - czyli robi te samokonkurencje, przed
+                    ktora panel ostrzega na innym ekranie. Nie wybieramy za
+                    uzytkownika, bo to zalezy od podzialu konta na kampanie. */}
+                {!!r.harvest_duplicate_of && r.harvest_duplicate_of > 1 && (
+                  <div
+                    className="mt-1 inline-flex items-center gap-1 rounded bg-warn-soft px-1.5 py-0.5 text-[10px] font-medium text-warn"
+                    title={`Te sama fraze chca przejac takze: ${(r.harvest_duplicate_campaigns ?? []).join(", ")}. Zatwierdz jedna pozycje - przy kilku kampanie zaczna licytowac przeciwko sobie.`}
+                  >
+                    ta sama fraza w {r.harvest_duplicate_of} miejscach - wybierz jedno
+                  </div>
+                )}
               </div>
             </div>
           );

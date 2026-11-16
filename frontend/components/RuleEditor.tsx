@@ -42,7 +42,15 @@ const SCHEDULE_OPTIONS = [
   { value: "168", label: "Co tydzień" },
 ];
 
-const field = "w-full rounded-lg border border-border bg-bg px-2.5 py-1.5 text-sm outline-none focus:border-accent";
+// UWAGA na `w-full`. Wczesniej siedzial tu, w czesci wspolnej, i dopisanie
+// obok wezszej klasy (`w-20`, `w-24`) nic nie dawalo: o tym, ktora szerokosc
+// wygra, decyduje kolejnosc regul w arkuszu Tailwinda, a nie kolejnosc nazw
+// w atrybucie class - a tam `.w-full` stoi za `.w-20`. Przez to w wierszu
+// warunku operator i pole liczbowe rozpychaly sie na cala szerokosc, lista
+// metryki scisnela sie do 22 px, a pole z liczba wyjezdzalo poza ekran.
+// Dlatego szerokosci NIE MA w czesci wspolnej - kazde pole podaje swoja.
+const fieldBase = "rounded-lg border border-border bg-bg px-2.5 py-1.5 text-sm outline-none focus:border-accent";
+const field = `${fieldBase} w-full`;
 const label = "mb-1 block text-xs font-medium text-muted";
 
 export function RuleEditor({
@@ -185,7 +193,7 @@ export function RuleEditor({
           {conditions.map((c, i) => (
             <div key={i} className="flex items-center gap-2">
               <select
-                className={`${field} flex-1`}
+                className={`${fieldBase} min-w-0 flex-1`}
                 value={c.metric}
                 onChange={(e) => setCondition(i, { metric: e.target.value })}
               >
@@ -196,7 +204,7 @@ export function RuleEditor({
                 ))}
               </select>
               <select
-                className={`${field} w-20 shrink-0`}
+                className={`${fieldBase} w-20 shrink-0`}
                 value={c.op}
                 onChange={(e) => setCondition(i, { op: e.target.value })}
               >
@@ -207,7 +215,7 @@ export function RuleEditor({
                 ))}
               </select>
               <input
-                className={`${field} tnum w-24 shrink-0`}
+                className={`${fieldBase} tnum w-24 shrink-0`}
                 inputMode="decimal"
                 value={c.value}
                 onChange={(e) => setCondition(i, { value: Number(e.target.value) })}
@@ -290,7 +298,7 @@ export function RuleEditor({
               />
               <span className="shrink-0 text-xs text-muted">p.p. na przebieg, sufit</span>
               <input
-                className={`${field} tnum w-20`}
+                className={`${fieldBase} tnum w-20`}
                 inputMode="decimal"
                 value={action.max_percent ?? 100}
                 onChange={(e) =>

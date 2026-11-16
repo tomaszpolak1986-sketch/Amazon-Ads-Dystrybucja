@@ -1525,6 +1525,7 @@ def all_suggestions(
         product_ads(session, profile_id, start, end, limit=5000, sensitivity=sensitivity),
         "PRODUCT", "ad_id", "sku",
     )
+    out.extend(_sugestie_budzetowe(session, profile_id, start, end, portfolio_id, dni_okna))
 
     # W obrebie poziomu ustawiamy po PIENIADZACH, nie po koszcie: obnizka na
     # pozycji palacej 600 EUR przy ACOS 48% jest warta trzydziestu korekt po
@@ -1568,6 +1569,121 @@ def all_suggestions(
     if profile_id:
         _attach_bid_ranges(session, profile_id, out)
     _attach_negative_patterns(out, frazy)
+    _oznacz_wielokrotne_przejecia(out)
+    return out
+
+
+def _oznacz_wielokrotne_przejecia(rows: list[dict[str, Any]]) -> None:
+    """Ta sama fraza proponowana do przejecia w kilku miejscach naraz.
+
+    Kazda z tych propozycji z osobna jest sensowna: fraza sprzedaje w kampanii
+    szerokiej, wiec warto zalozyc jej wlasny keyword EXACT i miec kontrole nad
+    stawka. Klopot zaczyna sie przy zatwierdzeniu WSZYSTKICH - wtedy dwie albo
+    trzy kampanie licytuja to samo zapytanie i konto konkuruje samo ze soba.
+    Panel ostrzega przed tym na osobnym ekranie, wiec nie moze jednoczesnie
+    cicho do tego prowadzic.
+
+    Sami nie wybieramy, ktore miejsce jest wlasciwe - to zalezy od tego, jak
+    uzytkownik dzieli konto na kampanie. Dajemy liczbe miejsc i nazwy kampanii,
+    zeby wybor byl swiadomy.
+    """
+    wg_frazy: dict[str, list[dict[str, Any]]] = {}
+    for r in rows:
+        akcja = r.get("action") or {}
+        if (akcja.get("type") or "").upper() != "HARVEST":
+            continue
+        tekst = str(akcja.get("keyword_text") or "").strip().lower()
+        if tekst:
+            wg_frazy.setdefault(tekst, []).append(r)
+
+    for lista in wg_frazy.values():
+        if len(lista) < 2:
+            continue
+        kampanie = [str(r.get("campaign_name") or r.get("campaign_id") or "?") for r in lista]
+        for r in lista:
+            r["harvest_duplicate_of"] = len(lista)
+            r["harvest_duplicate_campaigns"] = kampanie
+
+
+def _sugestie_budzetowe(
+    session: Session, profile_id: int | None, start: dt.date, end: dt.date,
+    portfolio_id: int | None, dni_okna: int,
+) -> list[dict[str, Any]]:
+    """Kampanie duszone wlasnym budzetem - z tego samego zrodla co ekran Okazje.
+
+    Wczesniej liste sugestii zasilal osobny, slabszy rachunek w `advice`:
+    porownywal SREDNI dzienny wydatek z budzetem. Srednia rozmywa ten sygnal,
+    bo kampania na limicie w 26 dni z 30 ma srednia ponizej progu. Efekt byl
+    taki, ze ekran Okazje pokazywal 26 kampanii, a lista sugestii jedna - ta
+    sama kampania bywala wiec raz okazja, raz niczym.
+
+    Okno jest TU KROTSZE niz wybrane w panelu i to nie jest niedopatrzenie:
+    budzet znamy wylacznie w dzisiejszej wersji, wiec porownywanie go
+    z wydatkiem sprzed miesiaca mowiloby o nieistniejacym ustawieniu. Z tego
+    samego powodu ACOS w tej sugestii moze sie roznic od ACOS w tabeli obok -
+    i dlatego opis podaje wprost, z ilu dni jest liczony.
+    """
+    dane = budget_capped(session, profile_id, start, end)
+    okno = dane.get("window") or {}
+    dni = int(okno.get("days") or BUDGET_WINDOW_DAYS)
+    ref = float(dane.get("acos_ref") or 0)
+    out: list[dict[str, Any]] = []
+
+    for r in dane.get("items") or []:
+        propozycja = r.get("suggested_budget")
+        if not propozycja:
+            # Kampania dobija limit, ale nie zarabia lepiej niz srednia -
+            # dokladanie jej budzetu powiekszyloby strate, a nie sprzedaz.
+            continue
+        if portfolio_id is not None and (r.get("portfolio_id") or 0) != portfolio_id:
+            continue
+
+        budzet = float(r.get("budget") or 0)
+        waluta = r.get("currency") or "EUR"
+        acos = r.get("acos")
+        dni_limitu = r.get("days_capped")
+
+        out.append({
+            "scope": "CAMPAIGN",
+            "entity_id": str(r.get("campaign_id") or ""),
+            "entity_name": r.get("name"),
+            "portfolio_id": r.get("portfolio_id") or 0,
+            "portfolio_name": r.get("portfolio_name") or "Bez portfolio",
+            "campaign_id": r.get("campaign_id"),
+            "campaign_name": r.get("name"),
+            "country": r.get("country"),
+            "currency": waluta,
+            "cost": r.get("cost"),
+            "sales": r.get("sales"),
+            "impressions": r.get("impressions"),
+            "clicks": r.get("clicks"),
+            "ctr": r.get("ctr"),
+            "cvr": r.get("cvr"),
+            "orders": r.get("orders"),
+            "acos": acos,
+            "code": "budget_capped",
+            "level": "good",
+            "title": f"Podnieś budżet do {propozycja:.2f} {waluta}",
+            "detail": (
+                f"Wyczerpuje budżet {budzet:.2f} {waluta} w {dni_limitu} z {dni} dni, "
+                f"a zarabia lepiej niż średnia konta: ACOS {acos:.1f}% wobec {ref:.1f}%. "
+                f"Każdy taki dzień to sprzedaż, która nie miała jak się wydarzyć. "
+                f"Krok +20% sprawdzi, czy popyt sięga dalej. Liczone z ostatnich "
+                f"{dni} dni, bo budżet znamy tylko w dzisiejszej wersji - dlatego "
+                f"ACOS może się tu różnić od tabeli liczonej z szerszego okna."
+            ),
+            "action": {
+                "type": "SET_BUDGET",
+                "campaign_id": r.get("campaign_id"),
+                "value": propozycja,
+                "from": budzet,
+            },
+            "basis": f"{dni_limitu} z {dni} dni na limicie",
+            "amazon_bid": None,
+            "pattern": None,
+            "impact": _waga_pieniezna(r, "budget_capped", dni, ref or 30.0),
+        })
+
     return out
 
 

@@ -200,6 +200,24 @@ def _fetch_placements(session: Session, profile_id: int, start: dt.date, end: dt
 # --------------------------------------------------------------------------- #
 
 
+def _najwazniejsze(rows: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
+    """Obcina liste do `limit` pozycji, zostawiajac te o najwiekszym wydatku.
+
+    Wczesniej obcinalo zwykle `[:limit]`, a zapytania zrodlowe nie maja
+    sortowania - zostawalo wiec pierwsze N w kolejnosci, w jakiej baza zwrocila
+    wiersze. Przy regule, ktora lapie wiecej pozycji niz limit, do kolejki szla
+    przypadkowe, nie najwazniejsze: mozna bylo dostac setke drobnych korekt,
+    a pominac te za kilkaset euro.
+
+    Wydatek jest tu miara wagi, bo to jedyna wielkosc wspolna dla wszystkich
+    zakresow i typow akcji - i to on stoi za ryzykiem zarowno przy obnizce,
+    jak i przy podwyzce.
+    """
+    if len(rows) <= limit:
+        return rows
+    return sorted(rows, key=lambda r: -(r.get("cost") or 0))[:limit]
+
+
 def _build_plan(
     session: Session, rule: Rule, profile_id: int, matched: list[dict[str, Any]]
 ) -> dict[str, Any] | None:
@@ -207,7 +225,7 @@ def _build_plan(
     kind = (action.get("type") or "").upper()
     limits = rule.limits or {}
     max_items = int(limits.get("max_items") or DEFAULT_MAX_ITEMS)
-    matched = matched[:max_items]
+    matched = _najwazniejsze(matched, max_items)
 
     if not matched:
         return None
@@ -467,7 +485,10 @@ def preview_rule(session: Session, rule: Rule, profile_id: int) -> dict[str, Any
         "matched": len(matched),
         "limited_to": min(len(matched), limit),
         "range": {"start": start.isoformat(), "end": end.isoformat()},
-        "sample": matched[:25],
+        # Probka pokazuje to, co REALNIE trafi do kolejki, czyli pozycje
+        # o najwiekszym wydatku - tak samo jak przy uruchomieniu reguly.
+        # Inaczej podglad obiecywalby co innego, niz przebieg by zrobil.
+        "sample": _najwazniejsze(matched, limit)[:25],
     }
 
 

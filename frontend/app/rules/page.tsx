@@ -32,7 +32,20 @@ const STATUS_TONE: Record<string, "good" | "warn" | "bad" | "neutral"> = {
 
 export default function RulesPage() {
   const { profileId, profiles, bump } = useFilters();
-  const [editing, setEditing] = useState<{ rule: RuleInput; id: number | null } | null>(null);
+  // `seq` to numer kolejnego otwarcia formularza. Sluzy za `key` dla
+  // RuleEditor, ktory trzyma pola w useState(initial) - a `useState` czyta
+  // wartosc poczatkowa TYLKO przy montowaniu. Bez tego klikniecie drugiego
+  // szablonu przy otwartym formularzu nic nie zmienialo: widziales nazwe
+  // nowego szablonu, ale warunki, zakres i akcja zostawaly z poprzedniego.
+  const [editing, setEditing] =
+    useState<{ rule: RuleInput; id: number | null; seq: number } | null>(null);
+  const [seq, setSeq] = useState(0);
+
+  function otworz(rule: RuleInput, id: number | null) {
+    setSeq((n) => n + 1);
+    setEditing({ rule, id, seq: seq + 1 });
+    setFormError(null);
+  }
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<number | null>(null);
@@ -111,7 +124,7 @@ export default function RulesPage() {
   function fromTemplate(t: RuleTemplate) {
     const { key: _key, ...rest } = t;
     void _key;
-    setEditing({ rule: { ...rest, enabled: true, schedule_hours: null }, id: null });
+    otworz({ ...rest, enabled: true, schedule_hours: null }, null);
     setShowTemplates(false);
   }
 
@@ -163,7 +176,7 @@ export default function RulesPage() {
             ))}
             <button
               onClick={() => {
-                setEditing({ rule: EMPTY_RULE, id: null });
+                otworz(EMPTY_RULE, null);
                 setShowTemplates(false);
               }}
               className="rounded-lg border border-dashed border-border p-3 text-left transition-colors hover:border-accent"
@@ -179,6 +192,7 @@ export default function RulesPage() {
         <Card title={editing.id ? "Edycja reguły" : "Nowa reguła"}>
           <div className="p-4">
             <RuleEditor
+              key={editing.seq}
               meta={meta.data}
               initial={editing.rule}
               onSave={save}
@@ -242,7 +256,7 @@ export default function RulesPage() {
                 <Button
                   size="sm"
                   variant="ghost"
-                  onClick={() => setEditing({ rule, id: rule.id })}
+                  onClick={() => otworz(rule, rule.id)}
                   title="Edytuj"
                 >
                   <Pencil className="size-3.5" />

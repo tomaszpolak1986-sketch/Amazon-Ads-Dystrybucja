@@ -76,6 +76,12 @@ export interface SuggestionRow {
   pattern: { token: string; terms: number; cost: number } | null;
   /** Czy stawka przekracza prog automatycznego kolejkowania */
   critical: boolean;
+  /** Ile razem miejsc chce przejac te sama fraze. Obecne tylko wtedy, gdy
+   *  jest ich wiecej niz jedno - zatwierdzenie wszystkich ustawia kampanie
+   *  do licytacji przeciwko sobie. */
+  harvest_duplicate_of?: number | null;
+  /** Nazwy kampanii, ktore chca te sama fraze. */
+  harvest_duplicate_campaigns?: string[] | null;
 }
 
 export interface SuggestionsResponse {

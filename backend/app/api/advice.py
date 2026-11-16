@@ -280,24 +280,16 @@ def suggest_campaign(row: dict[str, Any], ctx: Context) -> list[dict[str, Any]]:
                 90, None, basis,
             ))
 
-    # --- budzet ogranicza rentowna kampanie ---
-    if (
-        budget and daily >= budget * 0.9 and acos is not None
-        and acos < ref and orders >= 3
-    ):
-        # Krok, nie skok: +20% pokaze, czy jest popyt, bez ryzyka duzej kwoty
-        nowy = round(budget * 1.2, 2)
-        out.append(Suggestion(
-            "budget_capped", "good", f"Podnieś budżet do {_money(nowy, currency)}",
-            f"Wydaje {_money(daily, currency)} dziennie przy budżecie "
-            f"{_money(budget, currency)}, czyli praktycznie go wyczerpuje, "
-            f"a ACOS {_pct(acos)} jest poniżej średniej konta przy {orders} "
-            "zamówieniach. Krok +20% sprawdzi, czy jest jeszcze popyt.",
-            110,
-            {"type": "SET_BUDGET", "campaign_id": row.get("campaign_id"),
-             "value": nowy, "from": budget},
-            basis,
-        ))
+    # Budzetu TU NIE OCENIAMY i to jest swiadome. Ten rachunek ma do dyspozycji
+    # wylacznie sumy z calego okna, wiec jedyne, co mogl zrobic, to porownac
+    # SREDNI dzienny wydatek z budzetem - a srednia rozmywa dokladnie ten
+    # sygnal, ktory ma zlapac. Kampania wyczerpujaca budzet w 26 dni z 30 ma
+    # srednia ponizej progu i wypadala; na tym koncie dawalo to JEDNA pozycje,
+    # podczas gdy liczenie dni na limicie znajduje dwadziescia szesc.
+    #
+    # Pytanie o budzet wymaga danych dziennych i wlasnego, krotszego okna
+    # (budzet znamy tylko w dzisiejszej wersji), wiec odpowiada na nie
+    # `queries.budget_capped` i to ono zasila liste sugestii.
 
     if impressions >= MIN_IMPRESSIONS_FOR_CTR and ctx.avg_ctr and ctr < ctx.avg_ctr * 0.5:
         out.append(Suggestion(
@@ -661,6 +653,7 @@ def suggest_product(row: dict[str, Any], ctx: Context) -> list[dict[str, Any]]:
     clicks = row.get("clicks") or 0
     orders = row.get("orders") or 0
     cost = row.get("cost") or 0.0
+    sales = row.get("sales") or 0.0
     acos = row.get("acos")
     ad_id = row.get("ad_id")
     sku = row.get("sku") or "ten produkt"
@@ -686,12 +679,44 @@ def suggest_product(row: dict[str, Any], ctx: Context) -> list[dict[str, Any]]:
             basis,
         ))
     elif acos is not None and orders >= 2 and acos > ref * 2:
+        # Wstrzymanie jest tu JEDYNA dzwignia na poziomie produktu i to nie
+        # jest wybor projektowy, tylko tak dziala Amazon: stawki siedza na
+        # keywordach i targetach, czyli na calej grupie reklam. Na tym koncie
+        # kazdy drogo sprzedajacy produkt dzieli grupe z innymi - od dziesieciu
+        # do czterystu - wiec zejscie ze stawka "pod ten produkt" obnizyloby ja
+        # takze tym, ktore zarabiaja.
+        #
+        # Wczesniej ta sugestia nie miala akcji, a lista domyslnie odsiewa
+        # wszystko bez przycisku. Efekt: 74 produkty za 1523 EUR wydatku byly
+        # liczone i nigdy nie pokazane, podczas gdy widoczny "klika i nie
+        # sprzedaje" obejmowal 12 pozycji za 178 EUR.
+        traci = acos > 100
+        strata = cost - sales
+        if traci:
+            opis = (
+                f"{sku}: ACOS {_pct(acos)} - reklama kosztuje więcej, niż ten produkt "
+                f"sprzedaje. {_money(cost, currency)} wydatku wobec {_money(sales, currency)} "
+                f"sprzedaży, czyli {_money(strata, currency)} pod kreską na samej reklamie. "
+                "Wstrzymanie zatrzymuje tę stratę."
+            )
+        else:
+            opis = (
+                f"{sku}: ACOS {_pct(acos)} przy średniej konta {_pct(ref)}. Produkt "
+                f"sprzedaje - {_money(sales, currency)} z {orders} zamówień - ale kosztuje "
+                f"{_money(cost, currency)}, czyli ponad dwa razy drożej niż przeciętnie. "
+                "Wstrzymanie oszczędza wydatek, ale traci też tę sprzedaż: opłaca się "
+                "wtedy, gdy marża na tym produkcie jest niższa niż ten ACOS. Stawki są "
+                "wspólne dla całej grupy reklam, więc zejście z nimi dotknęłoby także "
+                "produkty, które zarabiają."
+            )
         out.append(Suggestion(
-            "product_expensive", "warn", "Bardzo drogo sprzedaje",
-            f"{sku}: ACOS {_pct(acos)} przy średniej konta {_pct(ref)}. Produkt "
-            "sprzedaje, ale każde zamówienie kosztuje dwa razy więcej niż przeciętnie. "
-            "Warto sprawdzić cenę i konkurencję na tej karcie, zanim ruszysz stawki.",
-            85, None, basis,
+            "product_expensive",
+            "bad" if traci else "warn",
+            "Dokłada do każdego zamówienia" if traci else "Bardzo drogo sprzedaje",
+            opis,
+            110 if traci else 85,
+            {"type": "PAUSE_PRODUCT", "ad_id": str(ad_id)},
+            basis,
         ))
 
     return [s.as_dict() for s in out[:MAX_SUGGESTIONS]]

@@ -25,9 +25,9 @@ export default function ProductsPage() {
         cell: (c: any) => {
           const r = c.row.original;
           return (
-            // Stala szerokosc (limit 22rem nadaje DataTable), zeby wiersze
+            // Stala szerokosc (limit nadaje DataTable), zeby wiersze
             // z miniatura i bez niej mialy rowna kolumne.
-            <div className="flex w-[22rem] min-w-0 items-center gap-2">
+            <div className="flex w-[18rem] min-w-0 items-center gap-2">
               {/* Zwykly <img>: obrazy Amazona sa zewnetrzne i nie ma sensu
                   przepuszczac ich przez optymalizator Next.
                   loading="lazy" ma tu szczegolne znaczenie: tabela renderuje

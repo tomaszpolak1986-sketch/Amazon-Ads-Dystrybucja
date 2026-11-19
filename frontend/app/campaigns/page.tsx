@@ -145,7 +145,7 @@ export default function CampaignsPage() {
           return (
             <Link
               href={`/campaigns?portfolio=${r.portfolio_id}`}
-              className="truncate text-xs text-accent hover:underline"
+              className="block max-w-[11rem] truncate text-xs text-accent hover:underline"
             >
               {r.portfolio_name}
             </Link>

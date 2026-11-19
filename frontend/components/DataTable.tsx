@@ -214,7 +214,7 @@ export function DataTable<T extends Record<string, any>>({
                         // uklad, wiec `truncate` w komorce nie mial granicy:
                         // dluga nazwa kampanii rozpychala kolumne do 760 px
                         // i koszty z ACOS chowaly sie za przewijaniem w bok.
-                        <div className="max-w-[22rem] min-w-0">
+                        <div className="max-w-[18rem] min-w-0">
                           <table.FlexRender cell={cell} />
                         </div>
                       )}

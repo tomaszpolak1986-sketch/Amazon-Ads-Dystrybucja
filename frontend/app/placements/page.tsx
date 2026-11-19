@@ -137,6 +137,10 @@ export default function PlacementsPage() {
         })}
       </div>
 
+      {/* Nad tabela per kampania, nie pod nia: ta ma ponad tysiac wierszy,
+          wiec sekcja na dole byla w praktyce niewidoczna. */}
+      <OffAmazon data={poza.data} loading={poza.loading} currency={currency} />
+
       <Card
         title="Placementy per kampania"
         subtitle={`${rows.length} pozycji · ${params.start} → ${params.end} · modyfikator to mnożnik stawki ustawiony w kampanii`}
@@ -154,8 +158,6 @@ export default function PlacementsPage() {
           />
         )}
       </Card>
-
-      <OffAmazon data={poza.data} loading={poza.loading} currency={currency} />
 
       <p className="px-1 text-xs text-muted">
         Modyfikator podnosi stawkę na danym placemencie. Reguła „Przenieś budżet na lepiej

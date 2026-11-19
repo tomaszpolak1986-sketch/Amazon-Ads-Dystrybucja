@@ -259,8 +259,12 @@ def _dedupe(rows: list[dict[str, Any]], keys: tuple[str, ...]) -> list[dict[str,
 def sync_profiles() -> list[dict[str, Any]]:
     raw = list_profiles()
     rows = []
+    attribution: list[int] = []
     for p in raw:
         info = p.get("accountInfo") or {}
+        if _profil_attribution(info):
+            attribution.append(int(p["profileId"]))
+            continue
         rows.append(
             {
                 "profile_id": int(p["profileId"]),
@@ -294,9 +298,32 @@ def sync_profiles() -> list[dict[str, Any]]:
 
     with session_scope() as session:
         _upsert(session, Profile, rows, "profile_id")
+        if attribution:
+            # Zapisane przed ta poprawka - usuwamy, o ile nie wisza na nich dane
+            puste = [
+                pid for pid in attribution
+                if not session.execute(
+                    select(Campaign.campaign_id).where(Campaign.profile_id == pid).limit(1)
+                ).first()
+            ]
+            if puste:
+                session.execute(delete(Profile).where(Profile.profile_id.in_(puste)))
+            log.info("Pominieto profile Amazon Attribution: %s", len(attribution))
 
     log.info("Zsynchronizowano %s profili", len(rows))
     return rows
+
+
+def _profil_attribution(info: dict[str, Any]) -> bool:
+    """Profil Amazon Attribution - pomiar ruchu spoza Amazona, nie konto reklamowe.
+
+    Amazon zwraca go w /v2/profiles razem z kontami reklamowymi, z kodem kraju
+    jak zwykly rynek. W przelaczniku rynkow wygladal jak drugi "UK" bez zadnej
+    kampanii (sprawdzone na koncie Murando: type=agency, nazwa "Attribution: ...").
+    """
+    if str(info.get("subType") or "").upper() == "AMAZON_ATTRIBUTION":
+        return True
+    return info.get("type") == "agency" and str(info.get("name") or "").startswith("Attribution")
 
 
 class KontoSpozaLicencji(RuntimeError):

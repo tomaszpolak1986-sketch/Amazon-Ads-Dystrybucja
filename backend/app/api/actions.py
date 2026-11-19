@@ -730,7 +730,14 @@ def plan_negatives(
                 NegativeKeyword.campaign_id,
                 NegativeKeyword.keyword_text,
                 NegativeKeyword.match_type,
-            ).where(NegativeKeyword.state != "ARCHIVED")
+            ).where(
+                NegativeKeyword.state != "ARCHIVED",
+                # Tylko kampanie z planu: bez tego zapytanie ciagnelo wszystkie
+                # wykluczenia wszystkich kont (setki tysiecy) - 18 s na plan.
+                NegativeKeyword.campaign_id.in_(
+                    sorted({str(it["campaignId"]) for it in items})
+                ),
+            )
         ).all()
     }
     pominiete = 0
@@ -1099,7 +1106,16 @@ def plan_harvest(
         (str(gid), (tekst or "").strip().lower(), (mt or "").upper())
         for gid, tekst, mt in session.execute(
             select(Keyword.ad_group_id, Keyword.keyword_text, Keyword.match_type)
-            .where(Keyword.profile_id == profile_id, Keyword.state != "ARCHIVED")
+            .where(
+                Keyword.profile_id == profile_id,
+                Keyword.state != "ARCHIVED",
+                # Tylko frazy z planu (grupa docelowa wybierana jest nizej, wiec
+                # nie da sie zawezic po grupie). Wczesniej ciagnelo wszystkie
+                # keywordy profilu - kilkanascie sekund na plan.
+                func.lower(Keyword.keyword_text).in_(
+                    sorted({(it.get("keywordText") or "").strip().lower() for it in items})
+                ),
+            )
         ).all()
     }
 
@@ -1753,7 +1769,13 @@ def plan_add_targets(
         (str(ag), json.dumps(e, sort_keys=True))
         for ag, e in session.execute(
             select(Target.ad_group_id, Target.expression)
-            .where(Target.profile_id == profile_id, Target.state != "ARCHIVED")
+            .where(
+                Target.profile_id == profile_id,
+                Target.state != "ARCHIVED",
+                Target.ad_group_id.in_(
+                    sorted({str(it.get("adGroupId")) for it in items if it.get("adGroupId")})
+                ),
+            )
         ).all()
         if e
     }

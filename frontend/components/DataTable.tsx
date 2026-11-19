@@ -21,6 +21,8 @@ import { ArrowDown, ArrowUp, ChevronsUpDown } from "lucide-react";
 import { useMemo, useState } from "react";
 import { EmptyState } from "./ui";
 
+const KROK = 500;
+
 export const tableFeaturesSet = tableFeatures({
   rowSortingFeature,
   sortedRowModel: createSortedRowModel(),
@@ -73,7 +75,12 @@ export function DataTable<T extends Record<string, any>>({
     onSortingChange: setSorting,
   });
 
-  const rows = table.getRowModel().rows;
+  // Ponad kilka tysiecy wierszy w DOM zamraza przegladarke na sekundy
+  // (wykluczenia: 20 000). Sortowanie i "zaznacz wszystkie" dzialaja na
+  // calosci - rysujemy tylko poczatek, reszta na zadanie.
+  const [limit, setLimit] = useState(KROK);
+  const allRows = table.getRowModel().rows;
+  const rows = allRows.length > limit ? allRows.slice(0, limit) : allRows;
 
   const allIds = useMemo(() => data.map(getRowId), [data, getRowId]);
   const allSelected = selectable && allIds.length > 0 && allIds.every((id) => selected!.has(id));
@@ -209,6 +216,27 @@ export function DataTable<T extends Record<string, any>>({
           })}
         </tbody>
       </table>
+      {allRows.length > rows.length && (
+        <div className="flex items-center justify-center gap-3 border-t border-border py-2 text-xs text-muted">
+          <span className="tnum">
+            Pokazano {rows.length} z {allRows.length}
+          </span>
+          <button
+            type="button"
+            className="text-accent hover:underline"
+            onClick={() => setLimit((l) => l + KROK * 4)}
+          >
+            Pokaż więcej
+          </button>
+          <button
+            type="button"
+            className="text-accent hover:underline"
+            onClick={() => setLimit(allRows.length)}
+          >
+            Pokaż wszystkie
+          </button>
+        </div>
+      )}
     </div>
   );
 }

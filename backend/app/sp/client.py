@@ -186,3 +186,27 @@ def check_access() -> dict[str, Any]:
         out["problem"] = str(exc)[:200]
 
     return out
+
+
+def rynki_sprzedawcy(client: SpClient) -> set[str] | None:
+    """Marketplace ID, na ktorych konto SP-API faktycznie sprzedaje.
+
+    Profile reklamowe potrafia obejmowac rynki innej firmy - login widzacy
+    kilka kont reklamowych (np. Murando i Artgeist) daje profile obu, a klucze
+    SP-API sa jednego sprzedawcy. Raport zamowien zamowiony dla rynku spoza
+    jego konta Amazon odrzuca W CALOSCI ("Merchant ... is not registered in
+    marketplace") - przez jeden obcy rynek przepadal podzial FBA wszystkich.
+
+    None, gdy nie da sie tego ustalic - wtedy nie filtrujemy.
+    """
+    try:
+        dane = client.get("/sellers/v1/marketplaceParticipations")
+    except SpApiError as exc:
+        log.warning("Nie udalo sie pobrac rynkow sprzedawcy: %s", str(exc)[:150])
+        return None
+    rynki = set()
+    for p in dane.get("payload", []) or []:
+        mp = (p.get("marketplace") or {}).get("id")
+        if mp and (p.get("participation") or {}).get("isParticipating", True):
+            rynki.add(mp)
+    return rynki or None

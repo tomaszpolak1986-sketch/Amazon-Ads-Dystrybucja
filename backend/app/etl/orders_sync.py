@@ -22,7 +22,7 @@ from ..db import session_scope
 from .zapis import wstaw_lub_zastap
 from ..models import FulfillmentDaily, Profile
 from ..sp import orders_report, sales_report
-from ..sp.client import SpApiError, SpClient
+from ..sp.client import SpApiError, SpClient, rynki_sprzedawcy
 
 log = logging.getLogger(__name__)
 
@@ -59,6 +59,14 @@ def sync_window(start: dt.date, end: dt.date) -> dict[str, Any]:
     log.info("Podzial FBA/wlasna: raport zamowien %s..%s", start, end)
     try:
         with SpClient() as client:
+            sprzedawcy = rynki_sprzedawcy(client)
+            if sprzedawcy is not None:
+                obce = sorted(set(rynki) - sprzedawcy)
+                if obce:
+                    log.info("Podzial FBA: pomijam rynki spoza konta SP-API: %s", ", ".join(obce))
+                rynki = [m for m in rynki if m in sprzedawcy]
+                if not rynki:
+                    return {"error": "Konto SP-API nie sprzedaje na zadnym z rynkow profili reklamowych"}
             rid = orders_report.utworz(client, rynki, start, end)
             log.info("Raport zamowien zamowiony (%s)", rid)
             doc = sales_report._wait(client, rid)

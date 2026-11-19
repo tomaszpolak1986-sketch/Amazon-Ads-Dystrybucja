@@ -16,7 +16,7 @@ from sqlalchemy import select
 from ..config import settings
 from ..db import session_scope
 from ..models import Profile
-from ..sp.client import SpApiError, SpClient
+from ..sp.client import SpApiError, SpClient, rynki_sprzedawcy
 from ..sp import sales_report
 from . import total_sales
 
@@ -118,6 +118,16 @@ def sync_all(
     do_ponowienia: list[tuple[int, str, str]] = []
 
     with SpClient() as client:
+        sprzedawcy = rynki_sprzedawcy(client)
+        if sprzedawcy is not None:
+            obce = [k for _, k, m in lista if m not in sprzedawcy]
+            if obce:
+                # Rynki profili innej firmy (ten sam login reklamowy) - raport
+                # sprzedazy i tak by sie dla nich odbil od Amazona.
+                log.info("Sprzedaz calkowita: pomijam rynki spoza konta SP-API: %s", ", ".join(obce))
+                for k in obce:
+                    podsumowanie[k] = {"skipped": "rynek spoza konta SP-API"}
+            lista = [x for x in lista if x[2] in sprzedawcy]
         for i, (pid, kraj, mp) in enumerate(lista, 1):
             if i > 1:
                 time.sleep(PRZERWA_MIEDZY_RYNKAMI)

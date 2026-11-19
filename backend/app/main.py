@@ -530,6 +530,18 @@ async def lifespan(_: FastAPI):
         misfire_grace_time=12 * 3600,
     )
 
+    if settings.auto_refresh_enabled:
+        # Oferty, katalog (tytuly, miniatury) i slownik kategorii - raz na dobe.
+        # Sprawdzamy co 3 h, a `slowniki.odswiez` sam pilnuje, czy minelo
+        # 20 h od ostatniego udanego przebiegu i czy nie trwa inne pobieranie.
+        from .etl import slowniki
+        scheduler.add_job(
+            slowniki.odswiez, "interval", hours=3,
+            next_run_time=dt.datetime.now() + dt.timedelta(minutes=10),
+            id="slowniki", replace_existing=True,
+            max_instances=1, coalesce=True,
+        )
+
     if settings.sb_sd_refresh_enabled:
         scheduler.add_job(
             _scheduled_sb_sd_refresh, "cron",

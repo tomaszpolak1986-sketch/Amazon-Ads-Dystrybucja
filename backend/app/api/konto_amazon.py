@@ -304,6 +304,13 @@ def _pierwsze_pobranie() -> bool:
             log.exception("Pierwsze pobranie po polaczeniu konta nie powiodlo sie")
         finally:
             sync_lock.zwolnij()
+        # Oferty, katalog i kategorie od razu, a nie dopiero przy dziennym
+        # przebiegu - inaczej wyszukiwarki i miniatury bylyby puste do jutra.
+        try:
+            from ..etl import slowniki
+            slowniki.odswiez(wymus=True)
+        except Exception:  # noqa: BLE001
+            log.exception("Pierwsze pobranie slownikow nie powiodlo sie")
 
     threading.Thread(target=_w_tle, name="pierwsze-pobranie", daemon=True).start()
     log.info("Pierwsze pobranie danych (30 dni) uruchomione po polaczeniu konta")

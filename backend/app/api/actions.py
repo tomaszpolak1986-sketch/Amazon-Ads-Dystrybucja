@@ -451,6 +451,7 @@ def apply_plan(
         "add_targets": _execute_add_targets,
         "default_bids": _execute_default_bids,
         "bidding_strategy": _execute_bidding_strategy,
+        "off_amazon": _execute_off_amazon,
         "create_campaign": _execute_create_campaign,
     }
     executor = executors.get(plan.kind)
@@ -1978,6 +1979,76 @@ def plan_bidding_strategy(
     return {**wynik, "skipped": pominiete}
 
 
+def plan_off_amazon(
+    session: Session,
+    profile_id: int,
+    pairs: Iterable[dict[str, Any]],
+    *,
+    source: str = "MANUAL",
+    rule_id: int | None = None,
+) -> dict[str, Any]:
+    """pairs: [{campaign_id, strategy}] - zasieg kampanii poza Amazonem.
+
+    Stan "przed" bierzemy z WLASNEJ pamieci, nie od Amazona: `offAmazonSettings`
+    wraca z API puste dla kazdej kampanii, wiec dopoki panel sam czegos nie
+    ustawi, nie wie, co jest wybrane w konsoli. Dlatego nie odsiewamy pozycji
+    "bo juz tak ma" - mogloby to pominac zmiane, ktora jest potrzebna.
+    """
+    pozycje = [dict(p) for p in pairs]
+    ids = [str(p["campaign_id"]) for p in pozycje]
+    stare = dict(
+        session.execute(
+            select(Campaign.campaign_id, Campaign.off_amazon_strategy).where(
+                Campaign.campaign_id.in_(ids)
+            )
+        ).all()
+    )
+    nazwy = dict(
+        session.execute(
+            select(Campaign.campaign_id, Campaign.name).where(Campaign.campaign_id.in_(ids))
+        ).all()
+    )
+
+    planned: list[dict[str, Any]] = []
+    pominiete: list[dict[str, Any]] = []
+    for poz in pozycje:
+        cid = str(poz["campaign_id"])
+        nowa = str(poz.get("strategy") or "").upper()
+        if nowa not in entities.ZASIEG_POZA_AMAZONEM:
+            pominiete.append({
+                "keyword": nazwy.get(cid) or cid,
+                "reason": "Amazon zna tu tylko dwie wartosci: zwiekszony zasieg albo ograniczenie do Amazona.",
+            })
+            continue
+        poprzednia = (stare.get(cid) or "").upper()
+        if poprzednia == nowa:
+            pominiete.append({
+                "keyword": nazwy.get(cid) or cid,
+                "reason": "Panel ustawil juz tej kampanii te wartosc.",
+            })
+            continue
+        planned.append({
+            "id": cid,
+            "entity_type": "CAMPAIGN",
+            "field": "off_amazon_strategy",
+            "old": entities.ZASIEG_POZA_AMAZONEM.get(poprzednia, "nieznane"),
+            "new": entities.ZASIEG_POZA_AMAZONEM[nowa],
+            "item": {"campaignId": cid, "strategy": nowa},
+        })
+
+    if not planned:
+        return {
+            "requires_confirmation": False, "plan_id": None, "kind": "off_amazon",
+            "summary": "Nie ma czego zmienic", "planned": [], "skipped": pominiete,
+        }
+    wynik = _create_plan(
+        session, profile_id, "off_amazon",
+        "Zasieg poza Amazonem w " + str(len(planned)) + " kampaniach",
+        {}, planned, source, rule_id,
+    )
+    return {**wynik, "skipped": pominiete}
+
+
 # --------------------------------------------------------------------------- #
 # Krok 2: wykonanie (prywatne - wylacznie przez apply_plan)
 # --------------------------------------------------------------------------- #
@@ -2496,6 +2567,22 @@ def _execute_bidding_strategy(session, profile_id, payload, planned, source, rul
     return _finalize(session, profile_id, planned, ok_ids, errors, source, rule_id, local)
 
 
+def _execute_off_amazon(session, profile_id, payload, planned, source, rule_id):
+    pary = [(p["id"], p["item"]["strategy"]) for p in planned]
+    with AdsClient(profile_id=profile_id) as client:
+        ok_ids, errors = _split_results(
+            entities.set_off_amazon_strategy(client, pary), "campaignId"
+        )
+
+    def local(p):
+        obj = session.get(Campaign, p["id"])
+        if obj:
+            # To jedyny slad tego ustawienia, jaki mamy - Amazon go nie oddaje.
+            obj.off_amazon_strategy = p["item"]["strategy"]
+
+    return _finalize(session, profile_id, planned, ok_ids, errors, source, rule_id, local)
+
+
 def _execute_placements(session, profile_id, payload, planned, source, rule_id):
     # Filtr jest TAKZE tutaj, nie tylko przy liczeniu planu. Plany nie wygasaja,
     # wiec w kolejce moze czekac taki policzony przed poprawka - z wierszem
@@ -2829,6 +2916,9 @@ FIELD_LABELS = {
     "ad_group": "nowa grupa reklam",
     "product_ad": "produkt w kampanii",
     "new_target": "nowy target",
+    "bidding_strategy": "strategia licytacji",
+    "off_amazon_strategy": "zasięg poza Amazonem",
+    "default_bid": "stawka domyślna grupy",
 }
 
 ENTITY_HINTS = {"PRODUCT_AD": "reklama produktu", "AD_GROUP": "grupa reklam"}

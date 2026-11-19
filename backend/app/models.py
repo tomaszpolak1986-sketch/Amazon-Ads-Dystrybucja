@@ -83,6 +83,13 @@ class Campaign(Base, TimestampMixin):
     budget_amount: Mapped[float | None] = mapped_column(Float)
     budget_type: Mapped[str | None] = mapped_column(String(32))
     bidding_strategy: Mapped[str | None] = mapped_column(String(64))
+    # Zasieg poza Amazonem: MAXIMIZE_REACH albo MINIMIZE_SPEND.
+    # UWAGA - Amazon tego NIE ODDAJE. `offAmazonSettings` wraca puste dla
+    # kazdej kampanii (sprawdzone na 87 kampaniach DE i UK, takze
+    # z `includeExtendedDataFields`), wiec jedyne zrodlo wiedzy o tym
+    # ustawieniu to zapis panelu. Kolumna trzyma to, co sami wyslalismy,
+    # i nic wiecej - stan ustawiony w konsoli Amazona pozostaje nieznany.
+    off_amazon_strategy: Mapped[str | None] = mapped_column(String(32))
     placement_bidding: Mapped[dict | None] = mapped_column(JSON)
     start_date: Mapped[dt.date | None] = mapped_column(Date)
     end_date: Mapped[dt.date | None] = mapped_column(Date)

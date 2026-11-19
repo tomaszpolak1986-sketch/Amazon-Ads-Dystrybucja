@@ -797,6 +797,124 @@ def placements(
     return [_derive(dict(r)) for r in session.execute(stmt).mappings().all()]
 
 
+# Nazwa, pod ktora Amazon raportuje emisje poza wlasnymi witrynami. To nie
+# jest placement w tym samym sensie co pozostale trzy: modyfikatora dla niego
+# ustawic sie NIE DA (API odrzuca zapis bledem 400), wlacza sie go przelacznikiem
+# na poziomie kampanii.
+OFF_AMAZON = "Off Amazon"
+
+
+def off_amazon(
+    session: Session, profile_id: int | None, start: dt.date, end: dt.date,
+) -> dict[str, Any]:
+    """Ruch poza witrynami Amazona - per kampania, obok wyniku na Amazonie.
+
+    Osobny widok, bo tego ustawienia NIE DA SIE odczytac z API: pole
+    `offAmazonSettings` wraca puste dla kazdej kampanii. Raport placementow
+    jest wiec jedynym sposobem, zeby zobaczyc, gdzie ta emisja faktycznie
+    chodzi - kampania z klikniecami Off Amazon ma ja wlaczona.
+
+    Zestawiamy to z wynikiem NA Amazonie tej samej kampanii, bo sam ACOS poza
+    Amazonem niczego nie rozstrzyga: 12% brzmi swietnie, dopoki nie widac, ze
+    ta sama kampania robi na Amazonie 9%.
+    """
+    kurs = kurs_dnia(PlacementDaily, profile_id)
+    poza = (
+        _fx_join(
+            select(
+                PlacementDaily.campaign_id,
+                *_sums(PlacementDaily, kurs),
+            ),
+            PlacementDaily, profile_id,
+        )
+        .where(
+            _window(PlacementDaily, profile_id, start, end),
+            PlacementDaily.placement == OFF_AMAZON,
+        )
+        .group_by(PlacementDaily.campaign_id)
+    )
+    na_amazonie = (
+        _fx_join(
+            select(
+                PlacementDaily.campaign_id,
+                *_sums(PlacementDaily, kurs),
+            ),
+            PlacementDaily, profile_id,
+        )
+        .where(
+            _window(PlacementDaily, profile_id, start, end),
+            PlacementDaily.placement != OFF_AMAZON,
+        )
+        .group_by(PlacementDaily.campaign_id)
+    )
+    wnetrze = {
+        str(r["campaign_id"]): _derive(dict(r))
+        for r in session.execute(na_amazonie).mappings().all()
+    }
+
+    nazwy = dict(
+        session.execute(select(Campaign.campaign_id, Campaign.name)).all()
+    )
+    kraje = dict(
+        session.execute(
+            select(Campaign.campaign_id, Profile.country_code)
+            .join(Profile, Profile.profile_id == Campaign.profile_id)
+        ).all()
+    )
+
+    pozycje: list[dict[str, Any]] = []
+    for r in session.execute(poza).mappings().all():
+        wiersz = _derive(dict(r))
+        cid = str(r["campaign_id"])
+        dom = wnetrze.get(cid) or {}
+        acos_poza = wiersz.get("acos")
+        acos_na = dom.get("acos")
+
+        # Werdykt mowi o PORÓWNANIU, nie o samej wartosci. Bez klikniec nie
+        # orzekamy nic - zero kliknieć to brak proby, nie zly wynik.
+        if not (wiersz.get("clicks") or 0):
+            werdykt = "bez ruchu"
+        elif not (wiersz.get("orders") or 0):
+            werdykt = "placi, nie sprzedaje"
+        elif acos_poza is not None and acos_na is not None:
+            werdykt = "lepiej niz na Amazonie" if acos_poza < acos_na else "gorzej niz na Amazonie"
+        else:
+            werdykt = "sprzedaje"
+
+        pozycje.append({
+            **wiersz,
+            "campaign_id": cid,
+            "campaign_name": nazwy.get(cid),
+            "country": kraje.get(cid),
+            "acos_on_amazon": acos_na,
+            "cost_on_amazon": dom.get("cost"),
+            "sales_on_amazon": dom.get("sales"),
+            "verdict": werdykt,
+        })
+
+    pozycje.sort(key=lambda x: -(x.get("cost") or 0))
+
+    suma_koszt = sum(p.get("cost") or 0 for p in pozycje)
+    suma_sprzedaz = sum(p.get("sales") or 0 for p in pozycje)
+    dom_koszt = sum(w.get("cost") or 0 for w in wnetrze.values())
+    dom_sprzedaz = sum(w.get("sales") or 0 for w in wnetrze.values())
+
+    pierwszy = session.execute(
+        select(func.min(PlacementDaily.date)).where(PlacementDaily.placement == OFF_AMAZON)
+    ).scalar()
+
+    return {
+        "since": pierwszy.isoformat() if pierwszy else None,
+        "campaigns": len(pozycje),
+        "cost": round(suma_koszt, 2),
+        "sales": round(suma_sprzedaz, 2),
+        "acos": round(suma_koszt / suma_sprzedaz * 100, 2) if suma_sprzedaz else None,
+        "share_of_cost": round(suma_koszt / dom_koszt * 100, 3) if dom_koszt else None,
+        "acos_on_amazon": round(dom_koszt / dom_sprzedaz * 100, 2) if dom_sprzedaz else None,
+        "items": pozycje,
+    }
+
+
 def campaign_detail(
     session: Session, campaign_id: str, start: dt.date, end: dt.date,
 ) -> dict[str, Any] | None:
@@ -814,6 +932,7 @@ def campaign_detail(
             Campaign.budget_amount.label("budget"),
             Campaign.budget_type,
             Campaign.bidding_strategy,
+            Campaign.off_amazon_strategy,
             Campaign.placement_bidding,
             Campaign.start_date,
             Campaign.end_date,

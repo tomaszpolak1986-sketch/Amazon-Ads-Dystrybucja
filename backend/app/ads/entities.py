@@ -212,6 +212,36 @@ def set_campaign_bidding_strategy(client: AdsClient, pairs: Iterable[tuple[str, 
     return update(client, "campaign", records)
 
 
+# Zasieg poza Amazonem - odpowiednik przelacznika w konsoli:
+# "Zwieksz zasieg poza Amazonem" / "Ogranicz zasieg do Amazona".
+# Dozwolone wartosci podal walidator Amazona przy probie z bledna wartoscia:
+#   Member must satisfy enum value set: [MAXIMIZE_REACH, MINIMIZE_SPEND]
+ZASIEG_POZA_AMAZONEM = {
+    "MAXIMIZE_REACH": "Zwieksz zasieg poza Amazonem",
+    "MINIMIZE_SPEND": "Ogranicz zasieg do Amazona",
+}
+
+
+def set_off_amazon_strategy(client: AdsClient, pairs: Iterable[tuple[str, str]]):
+    """Zasieg kampanii poza Amazonem.
+
+    Ustawienie dotyczy calej kampanii i wpuszcza (albo odcina) emisje poza
+    witrynami Amazona, wiec idzie przez te sama kolejke zatwierdzen co reszta.
+
+    Czytania NIE MA i nie jest to przeoczenie: `offAmazonSettings` wraca
+    z API puste dla kazdej kampanii, wiec po zapisie panel pokazuje wlasna
+    pamiec, a nie stan potwierdzony przez Amazona.
+    """
+    records = [
+        {
+            "campaignId": str(cid),
+            "offAmazonSettings": {"offAmazonBudgetControlStrategy": str(strategia)},
+        }
+        for cid, strategia in pairs
+    ]
+    return update(client, "campaign", records)
+
+
 def add_negative_keywords(
     client: AdsClient,
     items: Iterable[dict[str, Any]],

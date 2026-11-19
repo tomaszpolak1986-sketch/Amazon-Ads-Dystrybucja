@@ -70,6 +70,7 @@ export default function CampaignDetailPage() {
   // Lista strategii pochodzi z backendu, zeby panel i zadanie do Amazona
   // nie mogly sie rozjechac przy dopisaniu nowej.
   const strategie = useData(["bidding-strategies"], () => api.biddingStrategies());
+  const zasiegi = useData(["off-amazon-strategies"], () => api.offAmazonStrategies());
   const [bidDrafts, setBidDrafts] = useState<Map<string, number>>(new Map());
   // Stawka domyslna grupy reklam - edytowana tak samo jak stawki targetow,
   // przez wersje robocza i pasek zatwierdzenia, a nie zapisem wprost.
@@ -616,6 +617,40 @@ export default function CampaignDetailPage() {
                         {(strategie.data ?? []).map((s) => (
                           <option key={s.value} value={s.value}>
                             {s.label}
+                          </option>
+                        ))}
+                      </select>
+                      <span className="text-muted">·</span>
+                      {/* Zasieg poza Amazonem. Amazon tego ustawienia NIE ODDAJE
+                          przy odczycie - `offAmazonSettings` wraca puste dla kazdej
+                          kampanii - wiec pusty wybor znaczy "nie wiemy", a nie
+                          "ograniczone do Amazona". Po zapisie pokazujemy wlasna
+                          pamiec i mowimy o tym wprost w podpowiedzi. */}
+                      <select
+                        value={c.off_amazon_strategy ?? ""}
+                        disabled={profileId === null || bulk.busy}
+                        onChange={(e) => {
+                          const strategy = e.target.value;
+                          if (!strategy || strategy === c.off_amazon_strategy) return;
+                          bulk.preview(() =>
+                            api.planOffAmazon(profileId!, [
+                              { campaign_id: id, strategy },
+                            ]),
+                          );
+                        }}
+                        className="rounded-md border border-border bg-surface px-1.5 py-0.5 text-xs text-muted"
+                        title={
+                          c.off_amazon_strategy
+                            ? "Wartość ustawiona z panelu. Amazon nie zwraca tego ustawienia przy odczycie, więc panel pokazuje własny zapis."
+                            : "Amazon nie zwraca tego ustawienia, więc panel nie wie, co jest wybrane w konsoli. Wybór tutaj je nadpisze - zmiana trafi do kolejki zatwierdzeń."
+                        }
+                      >
+                        {!c.off_amazon_strategy && (
+                          <option value="">zasięg poza Amazonem…</option>
+                        )}
+                        {(zasiegi.data ?? []).map((z) => (
+                          <option key={z.value} value={z.value}>
+                            {z.label}
                           </option>
                         ))}
                       </select>

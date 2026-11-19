@@ -391,6 +391,16 @@ def sync_entities(profile_id: int) -> dict[str, int]:
                     "raw": c,
                 }
             )
+            # Zasieg poza Amazonem dopisujemy WYLACZNIE wtedy, gdy Amazon
+            # faktycznie cos poda. Dzis `offAmazonSettings` wraca puste dla
+            # kazdej kampanii, a panel trzyma w tej kolumnie wlasny zapis -
+            # bezwarunkowe nadpisanie skasowaloby jedyny slad tego ustawienia.
+            # Gdy Amazon zacznie je oddawac, jego wartosc wygrywa.
+            zasieg = (c.get("offAmazonSettings") or {}).get(
+                "offAmazonBudgetControlStrategy"
+            )
+            if zasieg:
+                rows[-1]["off_amazon_strategy"] = zasieg
         counts["campaigns"] = _upsert(session, Campaign, rows, "campaign_id")
         counts["campaigns_archived"] = _mark_archived(
             session, Campaign, pid, {r["campaign_id"] for r in rows}, "campaign_id",

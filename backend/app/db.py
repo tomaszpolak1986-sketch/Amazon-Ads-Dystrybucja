@@ -59,3 +59,40 @@ def init_db() -> None:
     from . import models  # noqa: F401  - rejestracja tabel w metadata
 
     models.Base.metadata.create_all(engine)
+    _dodaj_brakujace_kolumny(models.Base.metadata)
+
+
+def _dodaj_brakujace_kolumny(metadata) -> None:
+    """Dokłada do istniejących tabel kolumny, które doszły w modelu.
+
+    `create_all` tworzy brakujące tabele, ale istniejącej tabeli nie zmienia -
+    nowa kolumna w modelu (np. `campaigns.off_amazon_strategy` z 1.6.0)
+    kończyłaby się błędem przy pierwszym zapytaniu. U klienta aktualizacja
+    przychodzi w nocy bez udziału człowieka, więc schemat musi dogonić model
+    sam, przy starcie.
+
+    Wyłącznie ADD COLUMN dla kolumn dopuszczających NULL: nic nie kasuje, nie
+    zmienia typów i nie rusza danych. Kolumnę NOT NULL bez wartości domyślnej
+    pomijamy z ostrzeżeniem - takiej nie da się dodać do tabeli z wierszami.
+    """
+    import logging
+
+    from sqlalchemy import inspect
+
+    log = logging.getLogger(__name__)
+    insp = inspect(engine)
+    istniejace = set(insp.get_table_names())
+    with engine.begin() as conn:
+        for tabela in metadata.sorted_tables:
+            if tabela.name not in istniejace:
+                continue
+            w_bazie = {c["name"] for c in insp.get_columns(tabela.name)}
+            for kol in tabela.columns:
+                if kol.name in w_bazie:
+                    continue
+                if not kol.nullable and kol.server_default is None:
+                    log.warning("Kolumna %s.%s wymaga ręcznej migracji (NOT NULL)", tabela.name, kol.name)
+                    continue
+                typ = kol.type.compile(dialect=engine.dialect)
+                conn.exec_driver_sql(f'ALTER TABLE "{tabela.name}" ADD COLUMN "{kol.name}" {typ}')
+                log.info("Dodano kolumnę %s.%s (%s)", tabela.name, kol.name, typ)

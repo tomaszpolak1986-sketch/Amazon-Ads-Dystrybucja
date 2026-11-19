@@ -894,6 +894,21 @@ def get_placements(
     return queries.placements(session, profile_id, rng.start, rng.end, campaign_id)
 
 
+@app.get("/api/placements/off-amazon")
+def get_off_amazon(
+    profile_id: int | None = ProfileParam,
+    rng: DateRange = Depends(),
+    session: Session = Depends(get_session),
+):
+    """Emisja poza witrynami Amazona - per kampania, obok wyniku na Amazonie.
+
+    Osobny widok, bo samego USTAWIENIA nie da sie odczytac: Amazon zwraca
+    `offAmazonSettings` puste dla kazdej kampanii. Raport placementow jest
+    jedynym sposobem, zeby zobaczyc, gdzie ta emisja chodzi i ile przynosi.
+    """
+    return queries.off_amazon(session, profile_id, rng.start, rng.end)
+
+
 @app.get("/api/placements/by-campaign")
 def get_placements_by_campaign(
     profile_id: int | None = ProfileParam,
@@ -1827,6 +1842,17 @@ class BiddingStrategyRequest(BaseModel):
     items: list[BiddingStrategyItem]
 
 
+class OffAmazonItem(BaseModel):
+    campaign_id: str
+    # MAXIMIZE_REACH | MINIMIZE_SPEND
+    strategy: str
+
+
+class OffAmazonRequest(BaseModel):
+    profile_id: int
+    items: list[OffAmazonItem]
+
+
 class AddTargetItem(BaseModel):
     campaignId: str
     adGroupId: str
@@ -1909,6 +1935,33 @@ def post_bidding_strategy(
     if not req.items:
         raise HTTPException(400, "Nie podano zadnej kampanii")
     result = actions.plan_bidding_strategy(
+        session, req.profile_id, [i.model_dump() for i in req.items]
+    )
+    session.commit()
+    return result
+
+
+@app.get("/api/catalog/off-amazon-strategies")
+def get_off_amazon_strategies():
+    """Dwie wartosci, ktore Amazon tu przyjmuje - z czytelnymi nazwami."""
+    from .ads import entities
+
+    return [{"value": k, "label": v} for k, v in entities.ZASIEG_POZA_AMAZONEM.items()]
+
+
+@app.post("/api/actions/off-amazon")
+def post_off_amazon(req: OffAmazonRequest, session: Session = Depends(get_session)):
+    """Liczy plan zmiany zasiegu poza Amazonem. Nie wysyla nic do Amazona.
+
+    Ustawienie wpuszcza emisje poza witryny Amazona albo ja odcina, wiec
+    dotyka calego ruchu kampanii - stad ta sama kolejka zatwierdzen.
+
+    Amazon tego ustawienia NIE ODDAJE przy odczycie (`offAmazonSettings` wraca
+    puste), wiec panel zna wylacznie wartosci, ktore sam wyslal.
+    """
+    if not req.items:
+        raise HTTPException(400, "Nie podano zadnej kampanii")
+    result = actions.plan_off_amazon(
         session, req.profile_id, [i.model_dump() for i in req.items]
     )
     session.commit()

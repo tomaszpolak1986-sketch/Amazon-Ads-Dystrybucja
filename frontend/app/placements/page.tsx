@@ -5,6 +5,7 @@
 import { useMemo } from "react";
 import { DataTable } from "@/components/DataTable";
 import { metricColumns } from "@/components/metricColumns";
+import { OffAmazon } from "@/components/OffAmazon";
 import { Badge, Card, ErrorState, Skeleton } from "@/components/ui";
 import { api } from "@/lib/api";
 import { useFilters, useRangeParams } from "@/lib/filters";
@@ -30,6 +31,9 @@ export default function PlacementsPage() {
   const detail = useData(["placements-detail", params, revision], () =>
     api.placementsByCampaign({ ...params, limit: 5000 }),
   );
+  // Emisja poza Amazonem - osobne zrodlo, bo raport trzyma ja jako czwarty
+  // placement, ale rzadzi sie zupelnie inaczej (patrz komentarz w OffAmazon).
+  const poza = useData(["off-amazon", params, revision], () => api.offAmazon(params));
 
   const rows = detail.data ?? [];
   const totals = summary.data ?? [];
@@ -150,6 +154,8 @@ export default function PlacementsPage() {
           />
         )}
       </Card>
+
+      <OffAmazon data={poza.data} loading={poza.loading} currency={currency} />
 
       <p className="px-1 text-xs text-muted">
         Modyfikator podnosi stawkę na danym placemencie. Reguła „Przenieś budżet na lepiej

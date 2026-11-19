@@ -84,6 +84,36 @@ export interface SuggestionRow {
   harvest_duplicate_campaigns?: string[] | null;
 }
 
+export interface OffAmazonRow {
+  campaign_id: string;
+  campaign_name: string | null;
+  country: string | null;
+  clicks: number | null;
+  impressions: number | null;
+  cost: number | null;
+  sales: number | null;
+  orders: number | null;
+  acos: number | null;
+  /** ACOS tej samej kampanii na witrynach Amazona - punkt odniesienia. */
+  acos_on_amazon: number | null;
+  cost_on_amazon: number | null;
+  sales_on_amazon: number | null;
+  verdict: string;
+}
+
+export interface OffAmazonResult {
+  /** Pierwszy dzien, w ktorym Amazon w ogole zaraportowal ta emisje. */
+  since: string | null;
+  campaigns: number;
+  cost: number;
+  sales: number;
+  acos: number | null;
+  /** Udzial w calym wydatku, w procentach. */
+  share_of_cost: number | null;
+  acos_on_amazon: number | null;
+  items: OffAmazonRow[];
+}
+
 export interface SuggestionsResponse {
   /** Prog kosztu, powyzej ktorego regula w tle tworzy plan sama */
   threshold: number;
@@ -633,6 +663,10 @@ export interface CampaignDetail extends Metrics {
   budget: number | null;
   budget_type: string | null;
   bidding_strategy: string | null;
+  /** Zasieg poza Amazonem: MAXIMIZE_REACH albo MINIMIZE_SPEND.
+   *  Amazon tego ustawienia nie oddaje przy odczycie, wiec to pamiec panelu -
+   *  `null` znaczy "nie wiemy", a nie "ograniczone do Amazona". */
+  off_amazon_strategy: string | null;
   start_date: string | null;
   end_date: string | null;
   profile_id: number;
@@ -1215,6 +1249,14 @@ export const api = {
   ) => apiPost<ActionResult>("/api/actions/bidding-strategy", { profile_id, items }),
   biddingStrategies: () =>
     apiGet<Array<{ value: string; label: string }>>("/api/catalog/bidding-strategies"),
+  planOffAmazon: (
+    profile_id: number,
+    items: Array<{ campaign_id: string; strategy: string }>,
+  ) => apiPost<ActionResult>("/api/actions/off-amazon", { profile_id, items }),
+  offAmazonStrategies: () =>
+    apiGet<Array<{ value: string; label: string }>>("/api/catalog/off-amazon-strategies"),
+  offAmazon: (p: RangeParams) =>
+    apiGet<OffAmazonResult>("/api/placements/off-amazon", p),
   planAddTargets: (
     profile_id: number,
     items: Array<{

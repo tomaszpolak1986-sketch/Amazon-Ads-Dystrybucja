@@ -1886,6 +1886,27 @@ def _istniejace_wykluczenia(session: Session) -> set[tuple[str, str, str]]:
     }
 
 
+def _teksty_keywordow(session: Session, profile_id: int | None) -> set[str]:
+    """Teksty fraz, ktore juz sa keywordem EXACT - do odsiania przejmowania.
+
+    Patrzymy na CALE konto, nie na jedna grupe. W chwili liczenia sugestii nie
+    wiadomo jeszcze, dokad fraza trafi: grupe docelowa wybiera dopiero plan,
+    po zgodnosci asortymentu. Konto, ktore ma juz ten keyword gdziekolwiek,
+    panuje nad ta fraza - drugi taki sam w innej grupie to licytowanie samego
+    siebie, a nie nowa kontrola nad stawka.
+    """
+    warunki = [Keyword.match_type == "EXACT", Keyword.state != "ARCHIVED"]
+    if profile_id:
+        warunki.append(Keyword.profile_id == profile_id)
+    return {
+        (t or "").strip().lower()
+        for t in session.execute(
+            select(Keyword.keyword_text).where(*warunki)
+        ).scalars()
+        if t
+    }
+
+
 def _juz_wykluczone(
     action: dict[str, Any] | None, istniejace: set[tuple[str, str, str]]
 ) -> bool:

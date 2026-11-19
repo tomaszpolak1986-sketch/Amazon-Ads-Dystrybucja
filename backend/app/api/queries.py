@@ -1265,6 +1265,15 @@ def products(
         .order_by(func.sum(ProductDaily.cost).desc())
         .limit(limit)
     )
+    if not profile_id:
+        # Kurs z dnia trzeba DOLACZYC - samo odwolanie do FxRate w sumach
+        # robilo iloczyn kartezjanski z cala tabela kursow: zapytanie szlo
+        # 40-150 s zamiast 2 s, a sumy w widoku zbiorczym wychodzily zawyzone.
+        stmt = stmt.join(
+            FxRate,
+            and_(FxRate.date == ProductDaily.date, FxRate.currency == Profile.currency_code),
+            isouter=True,
+        )
     rows = [_derive(dict(r)) for r in session.execute(stmt).mappings().all()]
 
     # TACOS per produkt. Na poziomie rynku widac, czy ogolnie przeplacamy;

@@ -30,7 +30,40 @@ export function Scorecard({
 }) {
   const s = data?.scorecard;
   if (loading && !data) return null;
-  if (!s || !s.measured) return null;
+  if (!s || !s.measured) {
+    // Bez pomiaru kafelek kiedys znikal calkiem - i nikt nie wiedzial, ze
+    // istnieje ani kiedy sie pojawi. Teraz mowi wprost, na co czeka.
+    const czeka = data?.waiting_total ?? data?.waiting?.length ?? 0;
+    const najblizsza = data?.waiting?.length
+      ? Math.min(...data.waiting.map((w) => w.days_left))
+      : null;
+    const poDniach = data?.min_days_after ?? 7;
+    return (
+      <Card title="Jak wypadły Twoje zmiany">
+        <p className="text-sm text-muted">
+          {czeka > 0 ? (
+            <>
+              <span className="tnum font-semibold text-text">{czeka}</span>{" "}
+              {czeka === 1 ? "zmiana czeka" : "zmian czeka"} na pomiar.{" "}
+              {najblizsza !== null &&
+                (najblizsza <= 0
+                  ? "Pierwszy wynik pojawi się po najbliższym pobraniu danych."
+                  : `Pierwszy wynik za ${najblizsza} ${najblizsza === 1 ? "dzień" : "dni"}.`)}
+            </>
+          ) : (
+            <>
+              Nie ma jeszcze zatwierdzonych zmian do oceny. Gdy zatwierdzisz zmianę w{" "}
+              <Link href="/approvals" className="text-accent hover:underline">
+                Do zatwierdzenia
+              </Link>
+              , panel porówna wyniki przed i po niej – pierwsza ocena pojawi się tutaj{" "}
+              {poDniach} dni po wysłaniu zmiany do Amazona.
+            </>
+          )}
+        </p>
+      </Card>
+    );
+  }
 
   const pozycje = [
     { etykieta: "lepiej po zmianie", ile: s.better, klasa: "text-good" },

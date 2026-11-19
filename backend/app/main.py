@@ -531,7 +531,11 @@ async def lifespan(_: FastAPI):
         # sekund po samym systemie.
         scheduler.add_job(
             _startup_catchup, "date",
-            run_date=dt.datetime.now() + dt.timedelta(seconds=90),
+            # Czas ZE STREFA. Kontener chodzi w UTC, harmonogram w settings.tz:
+            # zwykle datetime.now() bylo czytane jako czas polski, termin wypadal
+            # godzine w przeszlosci i APScheduler wyrzucal zadanie jako spoznione -
+            # po kazdym starcie przepadalo nadrabianie danych i kursy walut.
+            run_date=dt.datetime.now(dt.timezone.utc) + dt.timedelta(seconds=90),
             id="startup_catchup", replace_existing=True,
         )
 
@@ -555,7 +559,7 @@ async def lifespan(_: FastAPI):
     # i przy jednej walucie konczy sie bez zadnego zapytania.
     scheduler.add_job(
         _odswiez_kursy, "date",
-        run_date=dt.datetime.now() + dt.timedelta(seconds=20),
+        run_date=dt.datetime.now(dt.timezone.utc) + dt.timedelta(seconds=20),
         id="fx_startup", replace_existing=True,
     )
     scheduler.add_job(
@@ -574,7 +578,7 @@ async def lifespan(_: FastAPI):
         from .etl import slowniki
         scheduler.add_job(
             slowniki.odswiez, "interval", hours=3,
-            next_run_time=dt.datetime.now() + dt.timedelta(minutes=10),
+            next_run_time=dt.datetime.now(dt.timezone.utc) + dt.timedelta(minutes=10),
             id="slowniki", replace_existing=True,
             max_instances=1, coalesce=True,
         )

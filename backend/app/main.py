@@ -130,7 +130,13 @@ def _sb_sd_jeden_rynek(pid: int, kod: str, start, end) -> None:
 
     # Encje najpierw - bez nich raporty nie maja do czego przypiac nazw.
     # Kazdy krok osobno, zeby jeden bledny nie zabral pozostalych.
+    from .etl import sync as etl_sync
+
     for etykieta, krok in (
+        # SP takze: zaden inny harmonogram nie odswiezal listy kampanii SP,
+        # wiec kampania zalozona recznie w Amazonie nie pojawiala sie w panelu
+        # az do klikniecia "Sync".
+        ("SP encje", lambda: etl_sync.sync_entities(pid)),
         ("SB encje", lambda: sb_sync.sync_entities(pid)),
         ("SD encje", lambda: sd_sync.sync_entities(pid)),
     ):
@@ -213,6 +219,37 @@ def _data_refresh_body(od: dt.date | None = None) -> None:
 
     if not settings.auto_refresh_enabled:
         return
+
+    # Rynki, ktorych pierwsze pobranie nie doszlo do skutku. Pierwsze pobranie
+    # idzie rynek po rynku przez kilka godzin; restart panelu w trakcie (np.
+    # nocna aktualizacja) ucinal reszte. Ponizsza lista rynkow bierze tylko te
+    # z kampaniami w bazie, wiec niepobrany rynek - u Murando DE i ES - nie
+    # wracal juz nigdy. Kryterium: brak udanego pobrania encji.
+    from .models import SyncRun
+
+    try:
+        with session_scope() as session:
+            pobrane = set(session.execute(
+                select(SyncRun.profile_id)
+                .where(SyncRun.kind == "entities", SyncRun.status == "OK")
+            ).scalars())
+            zalegle = [
+                (pid, kod or str(pid))
+                for pid, kod in session.execute(
+                    select(Profile.profile_id, Profile.country_code)
+                ).all()
+                if pid not in pobrane
+                and (kod or "").upper() not in settings.skip_market_list
+            ]
+    except Exception:
+        log.exception("Odswiezanie: nie udalo sie sprawdzic niepobranych rynkow")
+        zalegle = []
+    for pid, kod in zalegle:
+        log.info("Odswiezanie: rynek %s nie mial jeszcze pierwszego pobrania - pobieram 30 dni", kod)
+        try:
+            etl_sync.sync_all([pid], lookback_days=30)
+        except Exception:
+            log.exception("Pierwsze pobranie %s nie powiodlo sie", kod)
 
     end = dt.date.today() - dt.timedelta(days=1)
     start = end - dt.timedelta(days=settings.auto_refresh_days - 1)

@@ -61,6 +61,7 @@ function Zawartosc({ admin }: { admin: AdminStan }) {
         <>
           <AdsKarta stan={konto.data} />
           <SpKarta stan={konto.data} />
+          <RynkiKarta stan={konto.data} />
         </>
       )}
     </>
@@ -660,6 +661,82 @@ function SpKarta({ stan }: { stan: KontoAmazon }) {
             </div>
           </>
         )}
+        {wynik && <Wynik ok={wynik.ok}>{wynik.opis}</Wynik>}
+      </div>
+    </Card>
+  );
+}
+
+// --------------------------------------------------------------------------- //
+// Rynki
+// --------------------------------------------------------------------------- //
+
+/**
+ * Rynki, na ktorych firma nie sprzedaje (np. profile innej marki na tym samym
+ * loginie). Znikaja z przelacznika rynkow i nie sa pobierane; dane zostaja
+ * w bazie, wiec odznaczenie przywraca rynek od razu.
+ */
+function RynkiKarta({ stan }: { stan: KontoAmazon }) {
+  const qc = useQueryClient();
+  const [ukryte, setUkryte] = useState<Set<string>>(new Set(stan.rynki.ukryte));
+  const [wynik, setWynik] = useState<{ ok: boolean; opis: string } | null>(null);
+  const zmienione =
+    ukryte.size !== stan.rynki.ukryte.length || stan.rynki.ukryte.some((k) => !ukryte.has(k));
+
+  const zapisz = useMutation({
+    mutationFn: () => api.zapiszRynki([...ukryte]),
+    onSuccess: (d) => {
+      qc.setQueryData(["konto-amazon"], d);
+      void qc.invalidateQueries({ queryKey: ["profiles"] });
+      setWynik({ ok: true, opis: "Zapisano. Przełącznik rynków na górze już uwzględnia zmianę." });
+    },
+    onError: (err) => setWynik({ ok: false, opis: komunikat(err) }),
+  });
+
+  function przelacz(kod: string) {
+    setWynik(null);
+    setUkryte((s) => {
+      const n = new Set(s);
+      if (n.has(kod)) n.delete(kod);
+      else n.add(kod);
+      return n;
+    });
+  }
+
+  return (
+    <Card
+      title="Rynki"
+      subtitle="Odznacz kraje, w których nie sprzedajesz – znikną z panelu i nie będą pobierane. Pobrane dane zostają."
+    >
+      <div className="flex flex-col gap-3 p-4">
+        <div className="flex flex-wrap gap-2">
+          {stan.rynki.wszystkie.map((kod) => {
+            const widoczny = !ukryte.has(kod);
+            return (
+              <label
+                key={kod}
+                className={
+                  "flex cursor-pointer items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-medium " +
+                  (widoczny ? "border-accent/40 bg-accent-soft" : "border-border text-muted line-through")
+                }
+              >
+                <input
+                  type="checkbox"
+                  className="size-3.5 accent-[var(--accent)]"
+                  checked={widoczny}
+                  onChange={() => przelacz(kod)}
+                />
+                {kod}
+              </label>
+            );
+          })}
+        </div>
+        <div>
+          <Button variant="primary" onClick={() => zapisz.mutate()} disabled={!zmienione || zapisz.isPending}>
+            {zapisz.isPending && <Loader2 className="size-3.5 animate-spin" />}
+            Zapisz rynki
+          </Button>
+        </div>
         {wynik && <Wynik ok={wynik.ok}>{wynik.opis}</Wynik>}
       </div>
     </Card>

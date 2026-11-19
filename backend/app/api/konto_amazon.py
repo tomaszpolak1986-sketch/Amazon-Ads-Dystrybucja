@@ -12,6 +12,7 @@ czy sa ustawione, i ich ostatnie znaki do rozpoznania.
 from __future__ import annotations
 
 import logging
+import re
 import secrets
 import threading
 import time
@@ -149,6 +150,10 @@ def stan() -> dict[str, Any]:
             # ID kont Amazon (accountInfo.id) - potrzebne do przypiecia licencji
             "konta": _konta(),
         },
+        "rynki": {
+            "wszystkie": sorted({p["kraj"] for p in _profile() if p["kraj"]}),
+            "ukryte": sorted(settings.skip_market_list),
+        },
         "sp": {
             "client_id": _koncowka(settings.sp_client_id, 6),
             "client_secret": _koncowka(settings.sp_client_secret),
@@ -198,6 +203,24 @@ def zapisz_ads(body: AdsKlucze) -> dict[str, Any]:
     plik_env.zapisz(zmiany)
     _odswiez_token_provider()
     log.info("Zapisano klucze Ads API z panelu (Client ID …%s)", client_id[-6:])
+    return stan()
+
+
+class Rynki(BaseModel):
+    ukryte: list[str] = []
+
+
+@router.put("/rynki")
+def zapisz_rynki(body: Rynki) -> dict[str, Any]:
+    """Rynki, na ktorych nie sprzedajemy: znikaja z panelu i nie sa pobierane.
+
+    Dane juz pobrane zostaja w bazie - odznaczenie przywraca rynek od razu.
+    """
+    kody = sorted({k.strip().upper() for k in body.ukryte if k and k.strip()})
+    if any(not re.fullmatch(r"[A-Z]{2}", k) for k in kody):
+        raise HTTPException(400, "Kod rynku to dwie litery, np. TR.")
+    plik_env.zapisz({"SKIP_MARKETS": ",".join(kody)})
+    log.info("Ukryte rynki: %s", ",".join(kody) or "brak")
     return stan()
 
 

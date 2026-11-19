@@ -809,6 +809,16 @@ def sync_all(
         available = list(session.execute(select(Profile.profile_id)).scalars())
 
     targets = profile_ids or available
+    # Rynki ukryte w Ustawieniach nie sa pobierane (chyba ze wskazane wprost)
+    if not profile_ids and settings.skip_market_list:
+        with session_scope() as session:
+            ukryte = {
+                pid for pid, kod in session.execute(
+                    select(Profile.profile_id, Profile.country_code)
+                ).all()
+                if (kod or "").upper() in settings.skip_market_list
+            }
+        targets = [p for p in targets if p not in ukryte]
     end = dt.date.today() - dt.timedelta(days=1)
     start = end - dt.timedelta(days=lookback_days - 1)
 

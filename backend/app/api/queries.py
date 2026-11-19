@@ -202,6 +202,10 @@ def _window(model, profile_id: int | None, start: dt.date, end: dt.date):
 
 def profiles(session: Session) -> list[dict[str, Any]]:
     rows = session.execute(select(Profile).order_by(Profile.country_code)).scalars().all()
+    # Rynki ukryte w Ustawieniach (SKIP_MARKETS) - nie sprzedajemy tam, wiec
+    # nie ma ich w przelaczniku rynkow. Dane w bazie zostaja.
+    ukryte = settings.skip_market_list
+    rows = [p for p in rows if (p.country_code or "").upper() not in ukryte]
     return [
         {
             "profile_id": p.profile_id,

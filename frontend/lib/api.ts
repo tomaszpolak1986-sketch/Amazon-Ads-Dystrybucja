@@ -1004,6 +1004,7 @@ export type KontoAmazon = {
     refresh_token: string | null;
     region: string;
   };
+  rynki: { wszystkie: string[]; ukryte: string[] };
   test?: { ok: boolean; opis: string };
 };
 
@@ -1109,6 +1110,7 @@ export const api = {
   zapiszSp: (body: { client_id: string; client_secret: string; refresh_token: string; region: string }) =>
     apiPut<KontoAmazon>("/api/ustawienia/amazon/sp", body),
   testSp: () => apiPost<KontoAmazon>("/api/ustawienia/amazon/sp/test", {}),
+  zapiszRynki: (ukryte: string[]) => apiPut<KontoAmazon>("/api/ustawienia/amazon/rynki", { ukryte }),
   adminStan: () => apiGet<AdminStan>("/api/ustawienia/admin"),
   adminOdblokuj: (haslo: string) => apiPost<AdminStan>("/api/ustawienia/admin/odblokuj", { haslo }),
   adminZablokuj: () => apiPost<AdminStan>("/api/ustawienia/admin/zablokuj", {}),

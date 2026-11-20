@@ -16,7 +16,8 @@ import logging
 import time
 from typing import Any
 
-import httpx
+
+from ..siec import pobierz_plik
 
 from .client import SpApiError, SpClient
 
@@ -97,7 +98,7 @@ def _download(client: SpClient, document_id: str) -> dict[str, Any]:
     meta = client.get(f"/reports/2021-06-30/documents/{document_id}")
     url = meta["url"]
 
-    raw = httpx.get(url, follow_redirects=True, timeout=180).content
+    raw = pobierz_plik(url)
     if meta.get("compressionAlgorithm") == "GZIP":
         raw = gzip.decompress(raw)
     else:

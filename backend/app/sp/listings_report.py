@@ -32,7 +32,8 @@ import re
 import time
 from typing import Any
 
-import httpx
+
+from ..siec import pobierz_plik
 
 from .client import SpApiError, SpClient
 
@@ -196,7 +197,7 @@ def _data(tekst: str) -> dt.date | None:
 
 def _pobierz_dokument(client: SpClient, document_id: str) -> str:
     doc = client.get(f"/reports/2021-06-30/documents/{document_id}")
-    surowe = httpx.get(doc["url"], timeout=180).content
+    surowe = pobierz_plik(doc["url"])
     if doc.get("compressionAlgorithm") == "GZIP":
         surowe = gzip.decompress(surowe)
     # Raport jest w UTF-8 z BOM; `utf-8-sig` zdejmuje go z pierwszej kolumny.

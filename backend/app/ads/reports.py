@@ -22,7 +22,8 @@ import re
 import time
 from typing import Any
 
-import httpx
+
+from ..siec import pobierz_plik
 
 from .client import AdsApiError, AdsClient
 
@@ -308,10 +309,7 @@ def _wait(client: AdsClient, report_id: str, timeout_s: int = POLL_TIMEOUT_S) ->
 
 def _download(url: str) -> list[dict[str, Any]]:
     """Presigned URL S3 - bez naglowkow autoryzacji."""
-    with httpx.Client(timeout=180.0, follow_redirects=True) as http:
-        resp = http.get(url)
-        resp.raise_for_status()
-        raw = resp.content
+    raw = pobierz_plik(url)
 
     if raw[:2] == b"\x1f\x8b":
         with gzip.GzipFile(fileobj=io.BytesIO(raw)) as fh:

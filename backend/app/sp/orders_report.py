@@ -30,7 +30,8 @@ import logging
 from collections import defaultdict
 from typing import Any
 
-import httpx
+
+from ..siec import pobierz_plik
 
 from .client import SpClient
 
@@ -76,7 +77,7 @@ def utworz(client: SpClient, marketplace_ids: list[str], start: dt.date, end: dt
 
 def pobierz_tekst(client: SpClient, document_id: str) -> str:
     meta = client.get(f"/reports/2021-06-30/documents/{document_id}")
-    raw = httpx.get(meta["url"], follow_redirects=True, timeout=180).content
+    raw = pobierz_plik(meta["url"])
     if meta.get("compressionAlgorithm") == "GZIP" or raw[:2] == b"\x1f\x8b":
         try:
             raw = gzip.decompress(raw)

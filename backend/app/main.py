@@ -583,6 +583,17 @@ async def lifespan(_: FastAPI):
             max_instances=1, coalesce=True,
         )
 
+        # Historia wstecz (reklamy, sprzedaz, FBA) do ~90 dni - paczka 30 dni
+        # na rynek co 3 h, az do kompletu. Pierwsze pobranie bierze tylko 30
+        # dni i dotad nic nie siegalo dalej.
+        from .etl import historia
+        scheduler.add_job(
+            historia.krok, "interval", hours=3,
+            next_run_time=dt.datetime.now(dt.timezone.utc) + dt.timedelta(minutes=20),
+            id="historia", replace_existing=True,
+            max_instances=1, coalesce=True,
+        )
+
     if settings.sb_sd_refresh_enabled:
         scheduler.add_job(
             _scheduled_sb_sd_refresh, "cron",

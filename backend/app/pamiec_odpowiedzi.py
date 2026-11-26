@@ -10,7 +10,9 @@ Kiedy wynik przestaje byc aktualny:
 
 * po kazdym zapytaniu zmieniajacym cokolwiek (POST/PUT/PATCH/DELETE) -
   plan, odrzucenie sugestii, ustawienia; tu nie ma wyjatkow,
-* po kazdym przebiegu pobierania (zwolnienie `sync_lock`),
+* po kazdym przebiegu pobierania (zwolnienie `sync_lock`) - ale MIEKKO:
+  dotychczasowy wynik zostaje pod reka i jest podawany, dopoki liczenie
+  z wyprzedzeniem nie policzy nowego (patrz `_odczytaj`),
 * gdy zmienil sie stan kolejki planow, odrzuconych sugestii albo historii
   zmian - to wychwytuje zmiany robione w tle (reguly co 30 min),
 * najpozniej po `WAZNOSC` sekundach (12 h).
@@ -67,13 +69,21 @@ _TYLKO_DECYZJE = (
 )
 
 
-def uniewaznij(_powod: str = "", dane: bool = True) -> None:
-    """Kasuje gotowe odpowiedzi; przy `dane` takze ocenione skladniki."""
+def uniewaznij(_powod: str = "", dane: bool = True, miekko: bool = False) -> None:
+    """Kasuje gotowe odpowiedzi; przy `dane` takze ocenione skladniki.
+
+    `miekko` (nowe dane z Amazona): odpowiedzi nie znikaja, tylko przestaja
+    byc aktualne. Do czasu przeliczenia w tle podajemy poprzednie - ekran
+    z danymi sprzed kilkunastu minut jest lepszy niz minuta czekania. Po
+    decyzji uzytkownika (twarde kasowanie) tak nie wolno: musi od razu
+    zobaczyc jej skutek.
+    """
     global _bajty, _pokolenie, _pokolenie_danych
     with _lock:
         _pokolenie += 1
-        _wpisy.clear()
-        _bajty = 0
+        if not miekko:
+            _wpisy.clear()
+            _bajty = 0
         if dane:
             _pokolenie_danych += 1
             _obiekty.clear()
@@ -347,6 +357,42 @@ def _gotowy_do_pracy() -> bool:
         return False
 
 
+def _pobieranie_blokuje() -> bool:
+    """Czy trwajace pobieranie kaze wstrzymac liczenie z wyprzedzeniem.
+
+    Reklamy i sprzedaz - tak: zmieniaja wszystkie liczby, wynik policzony
+    w trakcie bylby od razu do wyrzucenia. Raporty SB/SD - nie: to drobna
+    czesc danych, a Amazon przygotowuje je po 20-60 minut na raport, wiec
+    caly przebieg trwa godzinami (26.11.2026: od 11:22 do poznej nocy).
+    Czekanie na niego zostawialo ekrany nieprzeliczone przez pol dnia.
+    Gdy SB/SD dla rynku skonczy, zwolnienie blokady i tak zleci przeliczenie.
+    """
+    from .etl import sync_lock
+
+    trwa = sync_lock.co_trwa()
+    return trwa is not None and not trwa.startswith("raporty SB/SD")
+
+
+# Dzien, dla ktorego ostatnio przeliczylismy ekrany. Po polnocy "wczoraj"
+# jest innym dniem - wszystkie okresy sie przesuwaja i gotowe wyniki nie
+# pasuja do zadnego zapytania. Sprawdzenie co kwadrans (harmonogram w main)
+# zleca wtedy przeliczenie, nie czekajac na najblizsze pobieranie.
+_dzien_rozgrzewki = None
+
+
+def nowy_dzien() -> None:
+    import datetime as dt
+
+    if (
+        _dzien_rozgrzewki is not None
+        and _dzien_rozgrzewki != dt.date.today()
+        and not _rozgrzewka.locked()
+        and not _rozgrzewka_znow.is_set()
+    ):
+        log.info("Nowy dzien - przeliczam ekrany na nowe okresy")
+        rozgrzej_w_tle()
+
+
 def _rozgrzej() -> None:
     import datetime as dt
     import os
@@ -361,11 +407,9 @@ def _rozgrzej() -> None:
     try:
         while _rozgrzewka_znow.is_set():
             # Czekamy na spokoj: koniec pobierania i minute bez zmian
-            from .etl import sync_lock
-
             while (
                 time.monotonic() - _ostatnia_zmiana < SPOKOJ
-                or sync_lock.co_trwa() is not None
+                or _pobieranie_blokuje()
             ):
                 time.sleep(5)
             _rozgrzewka_znow.clear()
@@ -399,6 +443,8 @@ def _rozgrzej() -> None:
                     "Ekrany policzone z wyprzedzeniem: %s z %s w %.0f s",
                     gotowe, len(adresy), time.monotonic() - t0,
                 )
+                global _dzien_rozgrzewki
+                _dzien_rozgrzewki = dt.date.today()
             except Exception:  # noqa: BLE001 - to tylko przyspieszenie
                 log.warning("Liczenie ekranow z wyprzedzeniem nie powiodlo sie", exc_info=True)
     finally:
@@ -452,20 +498,31 @@ def _zapisz(klucz: str, pokolenie: int, odcisk: str, tresc: bytes, naglowki: dic
             _bajty -= len(t)
 
 
-def _odczytaj(klucz: str, odcisk: str) -> tuple[bytes, dict[str, str]] | None:
+def _odczytaj(
+    klucz: str, odcisk: str, poprzednie: bool = False,
+) -> tuple[bytes, dict[str, str], bool] | None:
+    """(tresc, naglowki, czy_poprzednie) albo None.
+
+    `poprzednie`: wolno podac wynik sprzed ostatniego pobrania danych. Tylko
+    gdy przeliczenie w tle jest zlecone albo trwa - wtedy za chwile bedzie
+    nowy. Wpis w pamieci z nieaktualnym pokoleniem moze pochodzic wylacznie
+    z miekkiego uniewaznienia, bo twarde (decyzje) czysci wszystko. Odcisk
+    decyzji musi sie zgadzac - zmiany w tle (reguly) tez widac od razu.
+    """
     with _lock:
         wpis = _wpisy.get(klucz)
         if not wpis:
             return None
         kiedy, pokolenie, jego_odcisk, tresc, naglowki = wpis
-        if (
-            pokolenie != _pokolenie
-            or jego_odcisk != odcisk
-            or time.monotonic() - kiedy > WAZNOSC
+        if jego_odcisk != odcisk or time.monotonic() - kiedy > WAZNOSC:
+            return None
+        stary = pokolenie != _pokolenie
+        if stary and not (
+            poprzednie and (_rozgrzewka_znow.is_set() or _rozgrzewka.locked())
         ):
             return None
         _wpisy.move_to_end(klucz)
-    return zlib.decompress(tresc), naglowki
+    return zlib.decompress(tresc), naglowki, stary
 
 
 async def middleware(request: Request, call_next):
@@ -499,11 +556,16 @@ async def middleware(request: Request, call_next):
         request.url.path + "?" + urlencode(sorted(parse_qsl(request.url.query)))
         + "#" + dt.date.today().isoformat()
     )
+    # Przegladarka moze dostac wynik sprzed ostatniego pobrania, rozgrzewka
+    # nie - ona wlasnie ma policzyc nowy.
+    poprzednie = not czy_wewnetrzne(request)
     while True:
-        trafienie = _odczytaj(klucz, odcisk)
+        trafienie = _odczytaj(klucz, odcisk, poprzednie)
         if trafienie:
-            tresc, naglowki = trafienie
-            return Response(tresc, status_code=200, headers={**naglowki, "X-Pamiec": "1"})
+            tresc, naglowki, stary = trafienie
+            return Response(tresc, status_code=200, headers={
+                **naglowki, "X-Pamiec": "poprzednie" if stary else "1",
+            })
         trwa = _w_toku.get(klucz)
         if trwa is None:
             break
@@ -511,7 +573,7 @@ async def middleware(request: Request, call_next):
             await asyncio.shield(trwa)
         except Exception:  # noqa: BLE001 - nieudane liczenie: probujemy sami
             break
-        if not _odczytaj(klucz, odcisk):
+        if not _odczytaj(klucz, odcisk, poprzednie):
             break
 
     petla = asyncio.get_running_loop()

@@ -512,6 +512,11 @@ async def lifespan(_: FastAPI):
         _scheduled_rules_tick, "interval", minutes=30,
         id="rules", max_instances=1, coalesce=True,
     )
+    # Po polnocy przesuwaja sie okresy - przeliczenie ekranow na nowy dzien
+    scheduler.add_job(
+        pamiec_odpowiedzi.nowy_dzien, "interval", minutes=15,
+        id="ekrany_nowy_dzien", max_instances=1, coalesce=True,
+    )
 
     if settings.auto_refresh_enabled:
         scheduler.add_job(

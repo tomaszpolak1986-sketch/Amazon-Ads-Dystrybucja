@@ -317,16 +317,22 @@ def queued_action_keys(session: Session, profile_id: int | None = None) -> set[s
     granica = utcnow() - dt.timedelta(days=KARENCJA_STROJENIA_DNI)
     out: set[str] = set()
 
-    for plan in session.execute(select(PendingPlan).where(*conds)).scalars():
-        klucze = (plan.payload or {}).get("suggestion_keys") or []
+    # Same klucze, status i data - bez calych planow. Zatwierdzone plany zostaja
+    # w tabeli na zawsze, a funkcja jest wolana przy kazdym zestawieniu
+    # (Sugestie: szesc razy), wiec wczytywanie pelnych payloadow roslo z
+    # kazdym tygodniem pracy z panelem.
+    for status, applied_at, payload in session.execute(
+        select(PendingPlan.status, PendingPlan.applied_at, PendingPlan.payload).where(*conds)
+    ).all():
+        klucze = (payload or {}).get("suggestion_keys") or []
         if not klucze:
             continue
 
-        if plan.status == "PENDING":
+        if status == "PENDING":
             out.update(str(k) for k in klucze)
             continue
 
-        swiezy = plan.applied_at is not None and plan.applied_at >= granica
+        swiezy = applied_at is not None and applied_at >= granica
         for k in klucze:
             klucz = str(k)
             # Typ akcji stoi na poczatku klucza (patrz `action_key`).

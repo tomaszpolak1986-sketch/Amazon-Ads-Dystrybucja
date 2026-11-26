@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
+import threading
 from contextlib import asynccontextmanager
 from urllib.parse import urlsplit
 from typing import Any, Literal
@@ -11,6 +12,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from pydantic import BaseModel, Field
 from sqlalchemy import desc, select
 from sqlalchemy import delete as sa_delete
@@ -20,7 +22,8 @@ from . import auth, licencja
 from ._wydanie import WERSJA, WYMAGA_LICENCJI
 from .api import actions, anomalies, effectiveness, konto_amazon, queries
 from .config import settings
-from .db import get_session, init_db
+from . import pamiec_odpowiedzi
+from .db import get_session, indeksy_wydajnosci, init_db
 from .etl import sync, sync_lock
 from .rules import engine as rules_engine
 from .etl import business_report, total_sales
@@ -459,6 +462,12 @@ def _stan_licencji() -> licencja.Stan:
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     init_db()
+    # Indeksy w osobnym watku - start nie czeka (patrz `indeksy_wydajnosci`)
+    def _po_starcie() -> None:
+        indeksy_wydajnosci()
+        pamiec_odpowiedzi.rozgrzej_w_tle()
+
+    threading.Thread(target=_po_starcie, name="po-starcie", daemon=True).start()
     log.info(
         # Ten sam opis co w /api/health - pelny adres niesie haslo do bazy,
         # a log trafia do dziennika, ktory czyta wiecej osob niz .env.
@@ -638,6 +647,17 @@ app = FastAPI(
     openapi_url="/openapi.json" if settings.api_docs else None,
 )
 
+# Pamiec gotowych zestawien. Zarejestrowana PRZED guard, wiec biegnie po nim
+# (Starlette: ostatnio dodane = najbardziej zewnetrzne) - niezalogowany nigdy
+# nie dostanie odpowiedzi z pamieci.
+app.middleware("http")(pamiec_odpowiedzi.middleware)
+
+# Zestawienia maja po kilka MB JSON-a (reklamy produktow: 4 MB). U klienta
+# panel jest otwierany przez siec, a nie z tego samego komputera - skompresowane
+# to kilkaset KB.
+app.add_middleware(GZipMiddleware, minimum_size=2048, compresslevel=5)
+
+
 @app.middleware("http")
 async def guard(request: Request, call_next):
     """Zamyka cale /api poza logowaniem i health.
@@ -668,6 +688,7 @@ async def guard(request: Request, call_next):
         or auth.is_public(path)
         or settings.auth_disabled
         or auth.is_authenticated(request)
+        or pamiec_odpowiedzi.czy_wewnetrzne(request)
     ):
         return await call_next(request)
 

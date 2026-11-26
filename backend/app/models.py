@@ -290,7 +290,8 @@ class TargetDaily(Base, MetricsMixin):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     date: Mapped[dt.date] = mapped_column(Date, index=True)
-    profile_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    # Indeks po samym rynku zastepuje (profile_id, date) nizej
+    profile_id: Mapped[int] = mapped_column(BigInteger)
     campaign_id: Mapped[str] = mapped_column(String(64), index=True)
     ad_group_id: Mapped[str | None] = mapped_column(String(64), index=True)
     target_id: Mapped[str] = mapped_column(String(64), index=True)
@@ -302,6 +303,9 @@ class TargetDaily(Base, MetricsMixin):
 
     __table_args__ = (
         UniqueConstraint("date", "profile_id", "target_id", name="uq_target_daily"),
+        # Zestawienie jednego rynku za okres - czyta tylko jego wiersze, a nie
+        # wszystkie rynki z tych dni (patrz `db.indeksy_wydajnosci`).
+        Index("ix_target_daily_profil_data", "profile_id", "date"),
     )
 
 
@@ -310,7 +314,7 @@ class SearchTermDaily(Base, MetricsMixin):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     date: Mapped[dt.date] = mapped_column(Date, index=True)
-    profile_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    profile_id: Mapped[int] = mapped_column(BigInteger)
     campaign_id: Mapped[str] = mapped_column(String(64), index=True)
     ad_product: Mapped[str] = mapped_column(String(24), default="SP", index=True)
     ad_group_id: Mapped[str | None] = mapped_column(String(64), index=True)
@@ -324,18 +328,23 @@ class SearchTermDaily(Base, MetricsMixin):
             "date", "profile_id", "campaign_id", "target_id", "search_term",
             name="uq_search_term_daily",
         ),
+        Index("ix_search_term_daily_profil_data", "profile_id", "date"),
     )
 
 
 class ProductDaily(Base, MetricsMixin):
     __tablename__ = "metrics_product_daily"
 
+    # Najwieksza tabela panelu (miliony wierszy po trzech miesiacach) - kazdy
+    # zbedny indeks to wolniejszy zapis i wiecej czytania z dysku. Indeksy
+    # po samej dacie, rynku i grupie pokrywaja poczatki indeksow zlozonych,
+    # a po ad_product (prawie zawsze "SP") nie zaweza niczego.
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    date: Mapped[dt.date] = mapped_column(Date, index=True)
-    profile_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    date: Mapped[dt.date] = mapped_column(Date)
+    profile_id: Mapped[int] = mapped_column(BigInteger)
     campaign_id: Mapped[str] = mapped_column(String(64), index=True)
-    ad_product: Mapped[str] = mapped_column(String(24), default="SP", index=True)
-    ad_group_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    ad_product: Mapped[str] = mapped_column(String(24), default="SP")
+    ad_group_id: Mapped[str | None] = mapped_column(String(64))
     asin: Mapped[str | None] = mapped_column(String(32), index=True)
     sku: Mapped[str | None] = mapped_column(String(128), index=True)
 
@@ -347,6 +356,7 @@ class ProductDaily(Base, MetricsMixin):
         # wystarczaly - baza korzystala z jednego i dobierala reszte wierszami.
         # Zmierzone na 300 tys. wierszy: 5,2 s -> 1,7 s, kosztem 16 MB.
         Index("ix_product_daily_join", "ad_group_id", "sku", "date"),
+        Index("ix_product_daily_profil_data", "profile_id", "date"),
     )
 
 

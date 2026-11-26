@@ -1,12 +1,15 @@
 """Zapytania agregujace dla dashboardu."""
 from __future__ import annotations
 
+import contextvars
 import datetime as dt
 import json
 import re
 from typing import Any
 
-from sqlalchemy import Text, and_, case, cast, func, or_, select, literal
+from sqlalchemy import (
+    BigInteger, Date, Text, and_, case, cast, column, func, literal, or_, select, values,
+)
 from sqlalchemy.orm import Session
 
 from . import actions as actions_mod, advice, targeting_names
@@ -16,6 +19,7 @@ from ..models import (
     FxRate,
     DismissedSuggestion,
     AdGroup,
+    CatalogItem,
     Campaign,
     FulfillmentDaily,
     Portfolio,
@@ -188,6 +192,24 @@ def _labels_for(session: Session, profile_id: int | None) -> dict[tuple[str, str
 
     # Slownik jest wspoldzielony - nie modyfikujemy go w miejscu.
     return labels_etl.labels_for(session, marketplace)
+
+
+# Kolumny z `_sums` - do przepisania z podzapytania sumujacego.
+_SUMY = (
+    "impressions", "clicks", "cost", "orders", "sales", "units",
+    "sales_other_sku", "units_other_sku", "_tos_num", "_tos_den",
+)
+
+
+def _kolumny_sum(pod) -> list[Any]:
+    """Te same kolumny co `_sums`, ale wziete z gotowego podzapytania.
+
+    Zestawienia sumuja NAJPIERW (same identyfikatory), obcinaja do limitu
+    i dopiero do tego, co zostalo, doklejaja nazwy kampanii, grup i stawki.
+    W odwrotnej kolejnosci baza ciagnela nazwy przez sortowanie miliona
+    wierszy, zeby 99% z nich wyrzucic - Sugestie nie miescily sie w 30 s.
+    """
+    return [pod.c[k] for k in _SUMY]
 
 
 def _window(model, profile_id: int | None, start: dt.date, end: dt.date):
@@ -606,58 +628,37 @@ def targets(
     limit: int = 1000,
     sensitivity: float = 1.0,
 ) -> list[dict[str, Any]]:
-    stmt = (
-        select(
-            TargetDaily.target_id,
-            TargetDaily.target_kind,
-            TargetDaily.ad_product,
-            func.max(TargetDaily.target_text).label("target_text"),
-            func.max(TargetDaily.match_type).label("match_type"),
-            TargetDaily.campaign_id,
-            TargetDaily.ad_group_id,
-            Campaign.name.label("campaign_name"),
-            AdGroup.name.label("ad_group_name"),
-            func.coalesce(Keyword.bid, Target.bid, AdGroup.default_bid).label("bid"),
-            func.coalesce(Keyword.state, Target.state).label("state"),
-            # Postgres nie ma MAX() dla json/jsonb - agregujemy jako tekst.
-            # describe_expression() w targeting_names.py i tak robi json.loads()
-            # gdy dostaje string, wiec dalsze przetwarzanie dziala bez zmian.
-            func.max(cast(Target.expression, Text)).label("expression"),
-            # Waluta rynku. Bez niej warstwa sugestii wpada w zapasowe "EUR"
-            # i przy koncie GBP pisze "Podnies stawke do 0,23 EUR" obok kwoty
-            # 0,23 GBP - ta sama liczba w dwoch walutach, czyli komunikat,
-            # ktoremu nie sposob ufac.
-            Profile.currency_code.label("currency"),
-            *_sums(TargetDaily, kurs_dnia(TargetDaily, profile_id)),
-        )
-        .join(Campaign, Campaign.campaign_id == TargetDaily.campaign_id, isouter=True)
-        .join(AdGroup, AdGroup.ad_group_id == TargetDaily.ad_group_id, isouter=True)
-        .join(Keyword, Keyword.keyword_id == TargetDaily.target_id, isouter=True)
-        .join(Target, Target.target_id == TargetDaily.target_id, isouter=True)
-        .join(Profile, Profile.profile_id == TargetDaily.profile_id, isouter=True)
-        # Kwoty w widoku laczonym musza byc w jednej walucie: bez tego
-        # 198 GBP stalo w tabeli obok 198 EUR, a front i tak podpisywal
-        # wszystko jako EUR. Przy wybranym rynku `kurs_dnia` daje 1.0,
-        # wiec dla pojedynczego rynku nic sie nie zmienia.
-        .join(
-            FxRate,
-            and_(FxRate.date == TargetDaily.date,
-                 FxRate.currency == Profile.currency_code),
-            isouter=True,
+    sumy = (
+        _fx_join(
+            select(
+                TargetDaily.target_id,
+                TargetDaily.target_kind,
+                TargetDaily.ad_product,
+                TargetDaily.campaign_id,
+                TargetDaily.ad_group_id,
+                TargetDaily.profile_id,
+                func.max(TargetDaily.target_text).label("target_text"),
+                func.max(TargetDaily.match_type).label("match_type"),
+                # Kolejnosc po koszcie w walucie rynku
+                func.sum(TargetDaily.cost).label("kolejnosc"),
+                # Kwoty w widoku laczonym musza byc w jednej walucie: bez tego
+                # 198 GBP stalo w tabeli obok 198 EUR, a front i tak podpisywal
+                # wszystko jako EUR. Przy wybranym rynku `kurs_dnia` daje 1.0,
+                # wiec dla pojedynczego rynku nic sie nie zmienia.
+                *_sums(TargetDaily, kurs_dnia(TargetDaily, profile_id)),
+            ),
+            TargetDaily, profile_id,
         )
         .where(_window(TargetDaily, profile_id, start, end))
         .group_by(
             TargetDaily.target_id, TargetDaily.target_kind, TargetDaily.ad_product,
-            TargetDaily.campaign_id,
-            TargetDaily.ad_group_id, Campaign.name, AdGroup.name,
-            Keyword.bid, Target.bid, AdGroup.default_bid, Keyword.state, Target.state,
-            Profile.currency_code,
+            TargetDaily.campaign_id, TargetDaily.ad_group_id, TargetDaily.profile_id,
         )
         .order_by(func.sum(TargetDaily.cost).desc())
         .limit(limit)
     )
     if campaign_id:
-        stmt = stmt.where(TargetDaily.campaign_id == campaign_id)
+        sumy = sumy.where(TargetDaily.campaign_id == campaign_id)
     if kind:
         # Dla SP filtrujemy po match_type, bo zapisana kolumna bywa nieaktualna
         # w danych sprzed poprawki klasyfikacji. Dla SB i SD ufamy kolumnie -
@@ -666,14 +667,47 @@ def targets(
         sp = TargetDaily.ad_product == "SP"
         po_match = TargetDaily.match_type.in_(expr_types)
         po_kolumnie = TargetDaily.target_kind == kind.upper()
-        stmt = stmt.where(
+        sumy = sumy.where(
             or_(
                 and_(sp, po_match if kind.upper() == "TARGET" else ~po_match),
                 and_(~sp, po_kolumnie),
             )
         )
     if min_clicks:
-        stmt = stmt.having(func.sum(TargetDaily.clicks) >= min_clicks)
+        sumy = sumy.having(func.sum(TargetDaily.clicks) >= min_clicks)
+
+    t = sumy.subquery("t")
+    stmt = (
+        select(
+            t.c.target_id,
+            t.c.target_kind,
+            t.c.ad_product,
+            t.c.target_text,
+            t.c.match_type,
+            t.c.campaign_id,
+            t.c.ad_group_id,
+            Campaign.name.label("campaign_name"),
+            AdGroup.name.label("ad_group_name"),
+            func.coalesce(Keyword.bid, Target.bid, AdGroup.default_bid).label("bid"),
+            func.coalesce(Keyword.state, Target.state).label("state"),
+            # Jako tekst: describe_expression() w targeting_names.py i tak robi
+            # json.loads(), gdy dostaje string.
+            cast(Target.expression, Text).label("expression"),
+            # Waluta rynku. Bez niej warstwa sugestii wpada w zapasowe "EUR"
+            # i przy koncie GBP pisze "Podnies stawke do 0,23 EUR" obok kwoty
+            # 0,23 GBP - ta sama liczba w dwoch walutach, czyli komunikat,
+            # ktoremu nie sposob ufac.
+            Profile.currency_code.label("currency"),
+            *_kolumny_sum(t),
+        )
+        .select_from(t)
+        .join(Campaign, Campaign.campaign_id == t.c.campaign_id, isouter=True)
+        .join(AdGroup, AdGroup.ad_group_id == t.c.ad_group_id, isouter=True)
+        .join(Keyword, Keyword.keyword_id == t.c.target_id, isouter=True)
+        .join(Target, Target.target_id == t.c.target_id, isouter=True)
+        .join(Profile, Profile.profile_id == t.c.profile_id, isouter=True)
+        .order_by(t.c.kolejnosc.desc())
+    )
 
     labels = _labels_for(session, profile_id)
 
@@ -723,52 +757,62 @@ def search_terms(
     limit: int = 1000,
     sensitivity: float = 1.0,
 ) -> list[dict[str, Any]]:
-    stmt = (
-        select(
-            SearchTermDaily.search_term,
-            SearchTermDaily.campaign_id,
-            SearchTermDaily.ad_group_id,
-            SearchTermDaily.target_id,
-            func.max(SearchTermDaily.target_text).label("target_text"),
-            func.max(SearchTermDaily.match_type).label("match_type"),
-            Campaign.name.label("campaign_name"),
-            AdGroup.name.label("ad_group_name"),
-            # Waluta rynku - patrz komentarz przy `targets`.
-            Profile.currency_code.label("currency"),
-            *_sums(SearchTermDaily, kurs_dnia(SearchTermDaily, profile_id)),
-        )
-        .join(Campaign, Campaign.campaign_id == SearchTermDaily.campaign_id, isouter=True)
-        .join(AdGroup, AdGroup.ad_group_id == SearchTermDaily.ad_group_id, isouter=True)
-        .join(Profile, Profile.profile_id == SearchTermDaily.profile_id, isouter=True)
-        # Kwoty w widoku laczonym musza byc w jednej walucie: bez tego
-        # 198 GBP stalo w tabeli obok 198 EUR, a front i tak podpisywal
-        # wszystko jako EUR. Przy wybranym rynku `kurs_dnia` daje 1.0,
-        # wiec dla pojedynczego rynku nic sie nie zmienia.
-        .join(
-            FxRate,
-            and_(FxRate.date == SearchTermDaily.date,
-                 FxRate.currency == Profile.currency_code),
-            isouter=True,
+    sumy = (
+        _fx_join(
+            select(
+                SearchTermDaily.search_term,
+                SearchTermDaily.campaign_id,
+                SearchTermDaily.ad_group_id,
+                SearchTermDaily.target_id,
+                SearchTermDaily.profile_id,
+                func.max(SearchTermDaily.target_text).label("target_text"),
+                func.max(SearchTermDaily.match_type).label("match_type"),
+                func.sum(SearchTermDaily.cost).label("kolejnosc"),
+                # Waluta w widoku laczonym - patrz komentarz przy `targets`.
+                *_sums(SearchTermDaily, kurs_dnia(SearchTermDaily, profile_id)),
+            ),
+            SearchTermDaily, profile_id,
         )
         .where(_window(SearchTermDaily, profile_id, start, end))
         .group_by(
             SearchTermDaily.search_term, SearchTermDaily.campaign_id,
             SearchTermDaily.ad_group_id, SearchTermDaily.target_id,
-            Campaign.name, AdGroup.name, Profile.currency_code,
+            SearchTermDaily.profile_id,
         )
         .order_by(func.sum(SearchTermDaily.cost).desc())
         .limit(limit)
     )
     if campaign_id:
-        stmt = stmt.where(SearchTermDaily.campaign_id == campaign_id)
+        sumy = sumy.where(SearchTermDaily.campaign_id == campaign_id)
     if search:
-        stmt = stmt.where(SearchTermDaily.search_term.ilike(f"%{search}%"))
+        sumy = sumy.where(SearchTermDaily.search_term.ilike(f"%{search}%"))
     if min_clicks:
-        stmt = stmt.having(func.sum(SearchTermDaily.clicks) >= min_clicks)
+        sumy = sumy.having(func.sum(SearchTermDaily.clicks) >= min_clicks)
     if min_orders is not None:
-        stmt = stmt.having(func.sum(SearchTermDaily.orders) >= min_orders)
+        sumy = sumy.having(func.sum(SearchTermDaily.orders) >= min_orders)
     if max_orders is not None:
-        stmt = stmt.having(func.sum(SearchTermDaily.orders) <= max_orders)
+        sumy = sumy.having(func.sum(SearchTermDaily.orders) <= max_orders)
+
+    t = sumy.subquery("t")
+    stmt = (
+        select(
+            t.c.search_term,
+            t.c.campaign_id,
+            t.c.ad_group_id,
+            t.c.target_id,
+            t.c.target_text,
+            t.c.match_type,
+            Campaign.name.label("campaign_name"),
+            AdGroup.name.label("ad_group_name"),
+            Profile.currency_code.label("currency"),
+            *_kolumny_sum(t),
+        )
+        .select_from(t)
+        .join(Campaign, Campaign.campaign_id == t.c.campaign_id, isouter=True)
+        .join(AdGroup, AdGroup.ad_group_id == t.c.ad_group_id, isouter=True)
+        .join(Profile, Profile.profile_id == t.c.profile_id, isouter=True)
+        .order_by(t.c.kolejnosc.desc())
+    )
 
     out = [_derive(dict(r)) for r in session.execute(stmt).mappings().all()]
     _attach_catalog_po_tekscie(session, profile_id, out, "search_term")
@@ -1165,6 +1209,15 @@ def negative_keywords(
     campaign_id: str | None = None,
 ) -> list[dict[str, Any]]:
     """Istniejace wykluczenia slowne - to, co w panelu Amazona jest pod negative keywords."""
+    # Najpierw wybor `limit` pozycji po samym kluczu, potem nazwy i opisy:
+    # sortowanie pelnych wierszy szlo przez setki MB plikow tymczasowych.
+    wybor = select(NegativeKeyword.keyword_id).order_by(NegativeKeyword.keyword_text).limit(limit)
+    if profile_id:
+        wybor = wybor.where(NegativeKeyword.profile_id == profile_id)
+    if campaign_id:
+        wybor = wybor.where(NegativeKeyword.campaign_id == campaign_id)
+    if search:
+        wybor = wybor.where(NegativeKeyword.keyword_text.ilike(f"%{search}%"))
     stmt = (
         select(
             NegativeKeyword.keyword_id,
@@ -1181,15 +1234,9 @@ def negative_keywords(
         .join(Campaign, Campaign.campaign_id == NegativeKeyword.campaign_id, isouter=True)
         .join(AdGroup, AdGroup.ad_group_id == NegativeKeyword.ad_group_id, isouter=True)
         .join(Profile, Profile.profile_id == NegativeKeyword.profile_id, isouter=True)
+        .where(NegativeKeyword.keyword_id.in_(wybor))
         .order_by(NegativeKeyword.keyword_text)
-        .limit(limit)
     )
-    if profile_id:
-        stmt = stmt.where(NegativeKeyword.profile_id == profile_id)
-    if campaign_id:
-        stmt = stmt.where(NegativeKeyword.campaign_id == campaign_id)
-    if search:
-        stmt = stmt.where(NegativeKeyword.keyword_text.ilike(f"%{search}%"))
     return [dict(r) for r in session.execute(stmt).mappings().all()]
 
 
@@ -1210,6 +1257,15 @@ def negative_targets(
     campaign_id: str | None = None,
 ) -> list[dict[str, Any]]:
     """Wykluczone ASIN-y i marki - odpowiednik zakladki negative targeting."""
+    # Najpierw wybor `limit` pozycji po samym kluczu, potem nazwy i opisy:
+    # sortowanie pelnych wierszy szlo przez setki MB plikow tymczasowych.
+    wybor = select(NegativeTarget.target_id).order_by(NegativeTarget.value).limit(limit)
+    if profile_id:
+        wybor = wybor.where(NegativeTarget.profile_id == profile_id)
+    if campaign_id:
+        wybor = wybor.where(NegativeTarget.campaign_id == campaign_id)
+    if search:
+        wybor = wybor.where(NegativeTarget.value.ilike(f"%{search}%"))
     stmt = (
         select(
             NegativeTarget.target_id,
@@ -1226,15 +1282,9 @@ def negative_targets(
         .join(Campaign, Campaign.campaign_id == NegativeTarget.campaign_id, isouter=True)
         .join(AdGroup, AdGroup.ad_group_id == NegativeTarget.ad_group_id, isouter=True)
         .join(Profile, Profile.profile_id == NegativeTarget.profile_id, isouter=True)
+        .where(NegativeTarget.target_id.in_(wybor))
         .order_by(NegativeTarget.value)
-        .limit(limit)
     )
-    if profile_id:
-        stmt = stmt.where(NegativeTarget.profile_id == profile_id)
-    if campaign_id:
-        stmt = stmt.where(NegativeTarget.campaign_id == campaign_id)
-    if search:
-        stmt = stmt.where(NegativeTarget.value.ilike(f"%{search}%"))
 
     labels = _labels_for(session, profile_id)
     out = []
@@ -1394,57 +1444,59 @@ def product_ads(
     ogladania. Do dzialania trzeba wiedziec, KTORA reklame wstrzymac - ten sam
     SKU bywa reklamowany w kilku grupach i w jednej moze sprzedawac, a w innej nie.
     """
+    # Metryki sumujemy raz, po parze (grupa, SKU), i dopiero potem laczymy
+    # z reklamami. Wczesniej baza dociagala kazda reklame z osobna po indeksie -
+    # przy 200 tys. reklam 5-25 s na rynek i ponad 2 minuty w widoku lacznym.
+    sumy = (
+        select(ProductDaily.ad_group_id, ProductDaily.sku, *_sums(ProductDaily))
+        .where(_window(ProductDaily, profile_id, start, end))
+        .group_by(ProductDaily.ad_group_id, ProductDaily.sku)
+    )
+    if campaign_id:
+        # Grupa nalezy do jednej kampanii, wiec ten warunek niczego nie gubi.
+        sumy = sumy.where(ProductDaily.campaign_id == campaign_id)
+    # MATERIALIZED: liczone raz. Jako zwykle podzapytanie planista wpinal je
+    # pod rownolegle laczenie i kazdy z trzech watkow sumowal od nowa ten sam
+    # milion wierszy - DE szlo przez to 13-28 s zamiast kilku.
+    m = sumy.cte("m").prefix_with("MATERIALIZED")
+
+    reklamy = (
+        select(
+            ProductAd.ad_id, ProductAd.sku, ProductAd.asin, ProductAd.state,
+            ProductAd.campaign_id, ProductAd.ad_group_id, ProductAd.profile_id,
+            *_kolumny_sum(m),
+        )
+        .select_from(ProductAd)
+        .join(
+            m,
+            and_(m.c.sku == ProductAd.sku, m.c.ad_group_id == ProductAd.ad_group_id),
+            isouter=True,
+        )
+        .where(ProductAd.state != "ARCHIVED")
+        .order_by(m.c.cost.desc().nullslast())
+        .limit(limit)
+    )
+    if profile_id:
+        reklamy = reklamy.where(ProductAd.profile_id == profile_id)
+    if campaign_id:
+        reklamy = reklamy.where(ProductAd.campaign_id == campaign_id)
+
+    p = reklamy.subquery("p")
     stmt = (
         select(
-            ProductAd.ad_id,
-            ProductAd.sku,
-            ProductAd.asin,
-            ProductAd.state,
-            ProductAd.campaign_id,
-            ProductAd.ad_group_id,
+            p.c.ad_id, p.c.sku, p.c.asin, p.c.state, p.c.campaign_id, p.c.ad_group_id,
             Campaign.name.label("campaign_name"),
             AdGroup.name.label("ad_group_name"),
             Profile.country_code.label("country"),
             Profile.currency_code.label("currency"),
-            *_sums(ProductDaily),
+            *_kolumny_sum(p),
         )
-        .select_from(ProductAd)
-        .join(
-            ProductDaily,
-            and_(
-                ProductDaily.sku == ProductAd.sku,
-                ProductDaily.ad_group_id == ProductAd.ad_group_id,
-                ProductDaily.date >= start,
-                ProductDaily.date <= end,
-            ),
-            isouter=True,
-        )
-        .join(Campaign, Campaign.campaign_id == ProductAd.campaign_id, isouter=True)
-        .join(AdGroup, AdGroup.ad_group_id == ProductAd.ad_group_id, isouter=True)
-        .join(Profile, Profile.profile_id == ProductAd.profile_id, isouter=True)
-        # Kwoty w widoku laczonym musza byc w jednej walucie: bez tego
-        # 198 GBP stalo w tabeli obok 198 EUR, a front i tak podpisywal
-        # wszystko jako EUR. Przy wybranym rynku `kurs_dnia` daje 1.0,
-        # wiec dla pojedynczego rynku nic sie nie zmienia.
-        .join(
-            FxRate,
-            and_(FxRate.date == ProductDaily.date,
-                 FxRate.currency == Profile.currency_code),
-            isouter=True,
-        )
-        .where(ProductAd.state != "ARCHIVED")
-        .group_by(
-            ProductAd.ad_id, ProductAd.sku, ProductAd.asin, ProductAd.state,
-            ProductAd.campaign_id, ProductAd.ad_group_id, Campaign.name,
-            AdGroup.name, Profile.country_code, Profile.currency_code,
-        )
-        .order_by(func.sum(ProductDaily.cost).desc().nullslast())
-        .limit(limit)
+        .select_from(p)
+        .join(Campaign, Campaign.campaign_id == p.c.campaign_id, isouter=True)
+        .join(AdGroup, AdGroup.ad_group_id == p.c.ad_group_id, isouter=True)
+        .join(Profile, Profile.profile_id == p.c.profile_id, isouter=True)
+        .order_by(p.c.cost.desc().nullslast())
     )
-    if profile_id:
-        stmt = stmt.where(ProductAd.profile_id == profile_id)
-    if campaign_id:
-        stmt = stmt.where(ProductAd.campaign_id == campaign_id)
 
     out = []
     for r in session.execute(stmt).mappings().all():
@@ -1548,7 +1600,7 @@ def _odsiej_zalatwione(
     tyle ze dane pod nia pochodza sprzed zmiany. Karencja istnieje po to, zeby
     nie strzelac w ciemno, zanim widac skutek poprzedniej korekty.
     """
-    if not rows:
+    if not rows or _BEZ_ODSIEWU.get():
         return
     zakolejkowane = actions_mod.queued_action_keys(session, profile_id)
     odrzucone = dismissed_keys(session, profile_id)
@@ -1565,6 +1617,50 @@ def _odsiej_zalatwione(
                 continue
             zostaja.append(sug)
         row["suggestions"] = zostaja
+
+
+# Skladniki sugestii liczone do pamieci - bez odsiewania zalatwionych. Decyzje
+# zmieniaja sie czesciej niz dane (kazde "do kolejki"), a cofniecie odrzucenia
+# musi przywrocic pozycje, ktorej odsiany komplet juz by nie mial. Odsiewa
+# `all_suggestions`, za kazdym razem na swiezo.
+_BEZ_ODSIEWU: contextvars.ContextVar[bool] = contextvars.ContextVar("bez_odsiewu", default=False)
+
+
+def skladniki_sugestii(
+    session: Session, profile_id: int | None, start: dt.date, end: dt.date,
+    sensitivity: float = 1.0,
+) -> dict[str, list[dict[str, Any]]]:
+    """Ocenione pozycje wszystkich poziomow - wspolne dla Sugestii i strony glownej.
+
+    Zapamietane do najblizszej zmiany danych albo decyzji (patrz
+    `pamiec_odpowiedzi`). Wiersze sa wspoldzielone - tylko do odczytu.
+    """
+    from .. import pamiec_odpowiedzi
+
+    def licz() -> dict[str, list[dict[str, Any]]]:
+        znacznik = _BEZ_ODSIEWU.set(True)
+        try:
+            return _licz()
+        finally:
+            _BEZ_ODSIEWU.reset(znacznik)
+
+    def _licz() -> dict[str, list[dict[str, Any]]]:
+        return {
+            "kampanie": campaigns(
+                session, profile_id, start, end, limit=1000, sensitivity=sensitivity),
+            "targety": targets(
+                session, profile_id, start, end, limit=3000, sensitivity=sensitivity),
+            "placementy": placements_by_campaign(
+                session, profile_id, start, end, limit=2000),
+            "frazy": search_terms(
+                session, profile_id, start, end, limit=5000, sensitivity=sensitivity),
+            "produkty": product_ads(
+                session, profile_id, start, end, limit=5000, sensitivity=sensitivity),
+        }
+
+    return pamiec_odpowiedzi.pamietaj(
+        ("sugestie", profile_id, start, end, float(sensitivity)), licz,
+    )
 
 
 def all_suggestions(
@@ -1593,6 +1689,8 @@ def all_suggestions(
     sredni_acos = float(kpi.get("acos") or 0.0)
     prog_acos = min(sredni_acos, float(settings.acos_ceiling)) if sredni_acos > 0 \
         else float(settings.acos_ceiling)
+
+    sk = skladniki_sugestii(session, profile_id, start, end, sensitivity)
 
     def collect(rows: list[dict[str, Any]], scope: str, id_key: str, name_key: str):
         for row in rows:
@@ -1639,24 +1737,12 @@ def all_suggestions(
                     row, sug.get("code") or "", dni_okna, prog_acos
                 )
 
-    collect(
-        campaigns(session, profile_id, start, end, limit=1000, sensitivity=sensitivity),
-        "CAMPAIGN", "campaign_id", "name",
-    )
-    collect(
-        targets(session, profile_id, start, end, limit=3000, sensitivity=sensitivity),
-        "TARGET", "target_id", "target_text",
-    )
-    collect(
-        placements_by_campaign(session, profile_id, start, end, limit=2000),
-        "PLACEMENT", "placement", "placement",
-    )
-    frazy = search_terms(session, profile_id, start, end, limit=5000, sensitivity=sensitivity)
+    collect(sk["kampanie"], "CAMPAIGN", "campaign_id", "name")
+    collect(sk["targety"], "TARGET", "target_id", "target_text")
+    collect(sk["placementy"], "PLACEMENT", "placement", "placement")
+    frazy = sk["frazy"]
     collect(frazy, "SEARCH_TERM", "search_term", "search_term")
-    collect(
-        product_ads(session, profile_id, start, end, limit=5000, sensitivity=sensitivity),
-        "PRODUCT", "ad_id", "sku",
-    )
+    collect(sk["produkty"], "PRODUCT", "ad_id", "sku")
     out.extend(_sugestie_budzetowe(session, profile_id, start, end, portfolio_id, dni_okna))
 
     # W obrebie poziomu ustawiamy po PIENIADZACH, nie po koszcie: obnizka na
@@ -1671,11 +1757,12 @@ def all_suggestions(
     order = {"bad": 0, "warn": 1, "good": 2, "info": 3}
     out.sort(key=lambda x: (order.get(x["level"], 9), -(x.get("impact") or 0),
                             -(x.get("cost") or 0)))
-    out = _bez_powtorzonych_akcji(out)
-    out = out[:limit]
 
     # Sugestie juz wyslane do kolejki znikaja z listy - czekaja w zatwierdzeniach
-    # i nie ma sensu proponowac ich drugi raz.
+    # i nie ma sensu proponowac ich drugi raz. Odrzucone recznie - na stale
+    # albo do wskazanej daty - tez. Odsiew PRZED limitem: skladniki z pamieci
+    # nie sa odsiane (patrz `_BEZ_ODSIEWU`), a zalatwione nie moga zajmowac
+    # miejsc na liscie.
     zakolejkowane = actions_mod.queued_action_keys(session, profile_id)
     if zakolejkowane:
         out = [
@@ -1683,20 +1770,25 @@ def all_suggestions(
             if not r.get("action")
             or actions_mod.action_key(r["action"]) not in zakolejkowane
         ]
-
-    # Wykluczenie, ktore juz istnieje, Amazon odrzuci bledem 207 - a sugestia
-    # wygladalaby na wykonalna az do zatwierdzenia. Odsiewamy je tu, zeby nie
-    # proponowac pracy, ktora nie moze sie udac.
-    istniejace = _istniejace_wykluczenia(session)
-    out = [r for r in out if not _juz_wykluczone(r.get("action"), istniejace)]
-
-    # Sugestie odrzucone recznie - na stale albo do wskazanej daty
     odrzucone = dismissed_keys(session, profile_id)
     if odrzucone:
         out = [
             r for r in out
             if (r.get("scope"), str(r.get("entity_id")), r.get("code")) not in odrzucone
         ]
+
+    out = _bez_powtorzonych_akcji(out)
+    out = out[:limit]
+
+    # Wykluczenie, ktore juz istnieje, Amazon odrzuci bledem 207 - a sugestia
+    # wygladalaby na wykonalna az do zatwierdzenia. Odsiewamy je tu, zeby nie
+    # proponowac pracy, ktora nie moze sie udac.
+    istniejace = _istniejace_wykluczenia(session, {
+        str((r.get("action") or {}).get("keyword_text") or "").strip().lower()
+        for r in out
+        if (r.get("action") or {}).get("type") == "ADD_NEGATIVE"
+    })
+    out = [r for r in out if not _juz_wykluczone(r.get("action"), istniejace)]
 
     if profile_id:
         _attach_bid_ranges(session, profile_id, out)
@@ -1878,14 +1970,23 @@ def dismissed_keys(session: Session, profile_id: int | None) -> set[tuple[str, s
     }
 
 
-def _istniejace_wykluczenia(session: Session) -> set[tuple[str, str, str]]:
+def _istniejace_wykluczenia(
+    session: Session, teksty: set[str]
+) -> set[tuple[str, str, str]]:
     """Klucze wykluczen juz wprowadzonych: (grupa albo kampania, tekst, typ).
 
     Budujemy je raz na wywolanie i przekazujemy dalej - przy kilkuset
     sugestiach zapytanie na kazda z osobna kosztowaloby wiecej niz cala
     reszta liczenia. Cache miedzy wywolaniami byloby pulapka: po dodaniu
     wykluczenia lista musi to od razu uwzglednic.
+
+    `teksty` (malymi literami) zawezaja odczyt do fraz, o ktore w ogole
+    pytamy - wczesniej kazde otwarcie Sugestii wczytywalo do pamieci
+    wszystkie wykluczenia konta (trzysta tysiecy), i to dwa razy.
     """
+    teksty = {t for t in teksty if t}
+    if not teksty:
+        return set()
     return {
         (str(ag or cid), (txt or "").strip().lower(), (mt or "").upper())
         for ag, cid, txt, mt in session.execute(
@@ -1894,7 +1995,10 @@ def _istniejace_wykluczenia(session: Session) -> set[tuple[str, str, str]]:
                 NegativeKeyword.campaign_id,
                 NegativeKeyword.keyword_text,
                 NegativeKeyword.match_type,
-            ).where(NegativeKeyword.state != "ARCHIVED")
+            ).where(
+                NegativeKeyword.state != "ARCHIVED",
+                func.lower(func.trim(NegativeKeyword.keyword_text)).in_(sorted(teksty)),
+            )
         ).all()
     }
 
@@ -1967,22 +2071,26 @@ def _dopisz_samokonkurencje(
     if not rows:
         return
 
-    exact = _teksty_keywordow(session, profile_id)
-    if not exact:
-        return
-
     # Frazy bedace keywordem w konkretnej grupie: tam wiersz raportu opisuje
-    # ten wlasnie keyword, a nie konkurencje dwoch kampanii.
+    # ten wlasnie keyword, a nie konkurencje dwoch kampanii. Czytamy tylko te
+    # keywordy, ktorych tekst wystepuje w ocenianych frazach.
     warunki = [Keyword.match_type == "EXACT", Keyword.state != "ARCHIVED"]
     if profile_id:
         warunki.append(Keyword.profile_id == profile_id)
+    frazy = {(r.get("search_term") or "").strip().lower() for r in rows} - {""}
     w_grupie: set[tuple[str, str]] = {
         (str(ag or ""), (txt or "").strip().lower())
         for ag, txt in session.execute(
-            select(Keyword.ad_group_id, Keyword.keyword_text).where(*warunki)
+            select(Keyword.ad_group_id, Keyword.keyword_text).where(
+                *warunki,
+                func.lower(func.trim(Keyword.keyword_text)).in_(sorted(frazy)),
+            )
         ).all()
     }
-    istniejace = _istniejace_wykluczenia(session)
+    exact = {txt for _, txt in w_grupie}
+    if not exact:
+        return
+    istniejace = _istniejace_wykluczenia(session, exact)
 
     for row in rows:
         tekst = (row.get("search_term") or "").strip()
@@ -2177,13 +2285,6 @@ def harvest_candidates(
 
     Zwraca tylko te, ktorych jeszcze nie ma jako keyword EXACT na koncie.
     """
-    existing = {
-        (t or "").strip().lower()
-        for t in session.execute(
-            select(Keyword.keyword_text).where(Keyword.match_type == "EXACT")
-        ).scalars()
-    }
-
     stmt = (
         select(
             SearchTermDaily.search_term,
@@ -2205,8 +2306,21 @@ def harvest_candidates(
         .limit(limit * 3)
     )
 
+    wiersze = session.execute(stmt).mappings().all()
+    # Tylko keywordy, o ktore pytamy - nie wszystkie z konta.
+    frazy = {(r["search_term"] or "").strip().lower() for r in wiersze} - {""}
+    existing = {
+        (t or "").strip().lower()
+        for t in session.execute(
+            select(Keyword.keyword_text).where(
+                Keyword.match_type == "EXACT",
+                func.lower(func.trim(Keyword.keyword_text)).in_(sorted(frazy)),
+            )
+        ).scalars()
+    } if frazy else set()
+
     out = []
-    for r in session.execute(stmt).mappings().all():
+    for r in wiersze:
         row = _derive(dict(r))
         if row["acos"] is not None and row["acos"] > max_acos:
             continue
@@ -2322,17 +2436,40 @@ def ngram_analysis(
 
     prog_acos = acos_konta * PROG_ACOS
 
-    kubelki: dict[str, dict[str, Any]] = {}
+    # Dwa przebiegi. Pierwszy liczy same klikniecia fragmentow; pelne sumy
+    # i rozbicie na kampanie robimy dopiero dla tych, ktore przekrocza prog.
+    # Fragmentow sa setki tysiecy, a prog przechodzi kilkaset - budowanie
+    # kompletu dla wszystkich zajmowalo kilkanascie sekund.
+    fragmenty_frazy: dict[str, tuple[list[str], int]] = {}
+    klik_fragmentu: dict[str, int] = {}
     odrzucone_slabe = 0
     for r in rows:
-        slowa = (r["search_term"] or "").split()
-        for n in range(1, max_n + 1):
-            for i in range(max(0, len(slowa) - n + 1)):
-                fragment = slowa[i : i + n]
-                if not _czy_uzyteczny(fragment):
-                    odrzucone_slabe += 1
-                    continue
-                klucz = " ".join(fragment)
+        fraza = r["search_term"] or ""
+        gotowe = fragmenty_frazy.get(fraza)
+        if gotowe is None:
+            slowa = fraza.split()
+            klucze: list[str] = []
+            slabe = 0
+            for n in range(1, max_n + 1):
+                for i in range(max(0, len(slowa) - n + 1)):
+                    fragment = slowa[i : i + n]
+                    if _czy_uzyteczny(fragment):
+                        klucze.append(" ".join(fragment))
+                    else:
+                        slabe += 1
+            gotowe = fragmenty_frazy[fraza] = (klucze, slabe)
+        odrzucone_slabe += gotowe[1]
+        klik = int(r["clicks"] or 0)
+        for klucz in gotowe[0]:
+            klik_fragmentu[klucz] = klik_fragmentu.get(klucz, 0) + klik
+
+    duze = {k for k, ile in klik_fragmentu.items() if ile >= min_clicks}
+
+    kubelki: dict[str, dict[str, Any]] = {}
+    for r in rows:
+        for klucz in fragmenty_frazy[r["search_term"] or ""][0]:
+            if klucz in duze:
+                n = klucz.count(" ") + 1
                 b = kubelki.setdefault(klucz, {
                     "ngram": klucz, "n": n, "terms": set(), "_kampanie": {},
                     **{k: 0 for k in _METRIC_COLS},
@@ -2352,13 +2489,10 @@ def ngram_analysis(
         session.execute(select(Campaign.campaign_id, Campaign.name)).all()
     )
 
-    za_male = 0
+    za_male = len(klik_fragmentu) - len(duze)
     ponizej_progu = 0
     kandydaci: list[dict[str, Any]] = []
     for b in kubelki.values():
-        if b["clicks"] < min_clicks:
-            za_male += 1
-            continue
         kampanie = sorted(
             b.pop("_kampanie").items(), key=lambda kv: -kv[1]["cost"]
         )
@@ -2574,21 +2708,38 @@ def internal_competition(
     rozbicie po kampaniach - decyzja, ktora zostawic, nalezy do czlowieka,
     bo zalezy od roli kampanii (auto zbierajaca vs exact dowozaca).
     """
-    rows = session.execute(
+    # Frazy z jedna kampania albo za malo klikane odpadaja juz w bazie.
+    # Wczesniej wszystkie (setki tysiecy) wedrowaly do Pythona, zeby tam odpasc.
+    sumy = (
         select(
             SearchTermDaily.search_term,
             SearchTermDaily.campaign_id,
-            Campaign.name.label("campaign_name"),
-            Campaign.targeting_type.label("targeting_type"),
             *_sums(SearchTermDaily),
         )
-        .join(Campaign, Campaign.campaign_id == SearchTermDaily.campaign_id, isouter=True)
         .where(_window(SearchTermDaily, profile_id, start, end))
-        .group_by(
-            SearchTermDaily.search_term, SearchTermDaily.campaign_id,
-            Campaign.name, Campaign.targeting_type,
-        )
+        .group_by(SearchTermDaily.search_term, SearchTermDaily.campaign_id)
         .having(func.sum(SearchTermDaily.clicks) > 0)
+        .subquery("s")
+    )
+    okno_frazy = select(
+        sumy,
+        func.count().over(partition_by=sumy.c.search_term).label("ile_kampanii"),
+        func.sum(sumy.c.clicks).over(partition_by=sumy.c.search_term).label("ile_klikniec"),
+    ).subquery("o")
+    rows = session.execute(
+        select(
+            okno_frazy.c.search_term,
+            okno_frazy.c.campaign_id,
+            Campaign.name.label("campaign_name"),
+            Campaign.targeting_type.label("targeting_type"),
+            *_kolumny_sum(okno_frazy),
+        )
+        .select_from(okno_frazy)
+        .join(Campaign, Campaign.campaign_id == okno_frazy.c.campaign_id, isouter=True)
+        .where(
+            okno_frazy.c.ile_kampanii >= min_campaigns,
+            okno_frazy.c.ile_klikniec >= min_clicks,
+        )
     ).mappings().all()
 
     grouped: dict[str, list[dict[str, Any]]] = {}
@@ -2665,22 +2816,42 @@ def sku_overlap(
     kampanie roznia sie skutecznoscia: ten sam produkt, ta sama cena, a ACOS
     dwa razy wyzszy znaczy, ze budzet plynie gorszym kanalem.
     """
-    rows = session.execute(
+    sumy = (
         select(
             ProductDaily.sku,
             ProductDaily.asin,
             ProductDaily.campaign_id,
-            Campaign.name.label("campaign_name"),
-            Campaign.targeting_type.label("targeting_type"),
             *_sums(ProductDaily),
         )
-        .join(Campaign, Campaign.campaign_id == ProductDaily.campaign_id, isouter=True)
         .where(_window(ProductDaily, profile_id, start, end))
-        .group_by(
-            ProductDaily.sku, ProductDaily.asin, ProductDaily.campaign_id,
-            Campaign.name, Campaign.targeting_type,
-        )
+        .group_by(ProductDaily.sku, ProductDaily.asin, ProductDaily.campaign_id)
         .having(func.sum(ProductDaily.clicks) > 0)
+        .subquery("s")
+    )
+    # Ten sam klucz, po ktorym grupujemy nizej: SKU, a gdy go brak - ASIN.
+    klucz_sku = func.coalesce(
+        func.nullif(sumy.c.sku, ""), func.nullif(sumy.c.asin, ""), "?",
+    )
+    okno_sku = select(
+        sumy,
+        func.count().over(partition_by=klucz_sku).label("ile_kampanii"),
+        func.sum(sumy.c.clicks).over(partition_by=klucz_sku).label("ile_klikniec"),
+    ).subquery("o")
+    rows = session.execute(
+        select(
+            okno_sku.c.sku,
+            okno_sku.c.asin,
+            okno_sku.c.campaign_id,
+            Campaign.name.label("campaign_name"),
+            Campaign.targeting_type.label("targeting_type"),
+            *_kolumny_sum(okno_sku),
+        )
+        .select_from(okno_sku)
+        .join(Campaign, Campaign.campaign_id == okno_sku.c.campaign_id, isouter=True)
+        .where(
+            okno_sku.c.ile_kampanii >= min_campaigns,
+            okno_sku.c.ile_klikniec >= min_clicks,
+        )
     ).mappings().all()
 
     grouped: dict[str, list[dict[str, Any]]] = {}
@@ -2978,18 +3149,38 @@ def luki_w_danych(
     wczoraj = dt.date.today() - dt.timedelta(days=1)
     od = wczoraj - dt.timedelta(days=dni - 1)
 
-    conds = [model.date >= od, model.date <= wczoraj]
+    # Dla kazdej pary (dzien, rynek) pytamy tylko, czy JEST choc jeden wiersz.
+    # Indeks unikalny zaczyna sie od (date, profile_id), wiec to kilkaset
+    # trafien w indeks. Liczenie `count(distinct)` czytalo za kazdym razem
+    # cala tabele produktow - strona glowna otwierala sie przez to 15-30 s.
     if profile_id:
-        conds.append(model.profile_id == profile_id)
-
-    po_dniach = {
-        d: n
-        for d, n in session.execute(
-            select(model.date, func.count(func.distinct(model.profile_id)))
-            .where(*conds)
-            .group_by(model.date)
-        ).all()
-    }
+        rynki = [profile_id]
+    else:
+        rynki = list(session.execute(select(Profile.profile_id)).scalars())
+    dni_okna = [od + dt.timedelta(days=n) for n in range(dni)]
+    po_dniach: dict[dt.date, int] = {}
+    if rynki:
+        dzien_w = values(column("dzien", Date), name="dni").data([(d,) for d in dni_okna])
+        rynek_w = values(column("rynek", BigInteger), name="rynki").data([(r,) for r in rynki])
+        jest = (
+            select(literal(1))
+            .where(model.date == dzien_w.c.dzien, model.profile_id == rynek_w.c.rynek)
+            .correlate(dzien_w, rynek_w)
+            .limit(1)
+            .scalar_subquery()
+        )
+        pary = (
+            select(dzien_w.c.dzien.label("dzien"), jest.label("jest"))
+            .select_from(dzien_w.join(rynek_w, literal(True)))
+            .subquery()
+        )
+        po_dniach = {
+            d: n for d, n in session.execute(
+                select(pary.c.dzien, func.count(pary.c.jest))
+                .where(pary.c.jest.is_not(None))
+                .group_by(pary.c.dzien)
+            ).all()
+        }
     if not po_dniach:
         return {"missing": [], "partial": [], "from": None}
 
@@ -3308,65 +3499,93 @@ def catalog_search(
         if sku
     }
 
-    oferty = session.execute(
-        select(Listing).where(Listing.marketplace_id == marketplace)
-    ).scalars().all() if marketplace else []
+    szukane = (q or "").strip().lower()
 
-    if oferty:
-        pozycje = [{
-            "sku": o.sku,
-            "asin": o.asin,
-            "title": o.title,
-            "price": o.price,
-            "quantity": o.quantity,
-            "status": o.status,
-            "fulfillment": o.fulfillment,
-        } for o in oferty]
-    else:
-        # Zapas: rynek bez pobranych ofert. Wtedy znamy tylko to, co reklamowane.
-        pozycje = [{
-            "sku": r["sku"], "asin": r["asin"], "title": None,
-            "price": None, "quantity": None, "status": None, "fulfillment": None,
-        } for r in session.execute(
-            select(ProductAd.sku, ProductAd.asin)
-            .where(ProductAd.profile_id == profile_id, ProductAd.state != "ARCHIVED")
-            .group_by(ProductAd.sku, ProductAd.asin)
-        ).mappings().all()]
+    def _wiersz(sku, asin, tytul, obraz, cena, ilosc, wysylka) -> dict[str, Any]:
+        return {
+            "sku": sku,
+            "asin": asin,
+            "title": tytul,
+            "image": obraz,
+            "price": cena,
+            "quantity": ilosc,
+            "fulfillment": wysylka,
+            # Stan znamy tylko dla wysylki wlasnej - przy FBA raport pokazuje
+            # zero, chociaz towar lezy w magazynie Amazona.
+            "out_of_stock": ilosc == 0 and (wysylka or "DEFAULT") == "DEFAULT",
+            "campaigns": kampanie.get(sku, 0),
+        }
+
+    ma_oferty = bool(marketplace) and session.execute(
+        select(Listing.sku).where(Listing.marketplace_id == marketplace).limit(1)
+    ).first() is not None
+
+    if ma_oferty:
+        # Szukanie, sortowanie i limit w bazie. Wczesniej kazde wpisane slowo
+        # wczytywalo wszystkie oferty rynku (u Murando 144 tys.) i dopiero
+        # Python je przesiewal - kilkanascie sekund na znak, a od pewnej liczby
+        # ofert blad 500 (za duzo parametrow w jednym zapytaniu).
+        # Warunek i kolejnosc sa te same co wczesniej: fraza w kodzie, ASIN-ie,
+        # tytule albo marce; najpierw pozycje z tytulem, alfabetycznie.
+        tytul = func.coalesce(Listing.title, CatalogItem.title)
+        stmt = (
+            select(
+                Listing.sku, Listing.asin, tytul.label("tytul"), CatalogItem.image_small,
+                Listing.price, Listing.quantity, Listing.fulfillment,
+            )
+            .select_from(Listing)
+            .join(
+                CatalogItem,
+                and_(CatalogItem.asin == Listing.asin,
+                     CatalogItem.marketplace_id == Listing.marketplace_id),
+                isouter=True,
+            )
+            .where(Listing.marketplace_id == marketplace)
+        )
+        if szukane:
+            stmt = stmt.where(
+                func.lower(func.concat_ws(
+                    " ", Listing.sku, Listing.asin, tytul, CatalogItem.brand,
+                )).contains(szukane, autoescape=True)
+            )
+        stmt = stmt.order_by(
+            tytul.is_(None),
+            # Kolejnosc znakow jak w Pythonie, nie wg reguł jezyka bazy
+            func.lower(func.coalesce(tytul, Listing.sku)).collate("C"),
+            Listing.sku,
+        ).limit(limit)
+        return [_wiersz(*r) for r in session.execute(stmt).all()]
+
+    # Zapas: rynek bez pobranych ofert. Wtedy znamy tylko to, co reklamowane.
+    pozycje = [{
+        "sku": r["sku"], "asin": r["asin"], "title": None,
+        "price": None, "quantity": None, "status": None, "fulfillment": None,
+    } for r in session.execute(
+        select(ProductAd.sku, ProductAd.asin)
+        .where(ProductAd.profile_id == profile_id, ProductAd.state != "ARCHIVED")
+        .group_by(ProductAd.sku, ProductAd.asin)
+    ).mappings().all()]
 
     katalog = catalog_etl.lookup(
         session, marketplace, [p["asin"] for p in pozycje if p["asin"]]
     )
 
-    szukane = (q or "").strip().lower()
     out: list[dict[str, Any]] = []
     for p in pozycje:
         dane = katalog.get(p["asin"] or "") or {}
-        # Tytul z oferty jest wlasny i zwykle dokladniejszy; katalog to zapas.
-        tytul = p["title"] or dane.get("title")
+        tytul_p = p["title"] or dane.get("title")
         if szukane:
             # Szukamy po kodzie i po tytule naraz - uzytkownik pamieta jedno
             # albo drugie, rzadko oba.
             gdzie = " ".join(
-                filter(None, [p["sku"], p["asin"], tytul, dane.get("brand")])
+                filter(None, [p["sku"], p["asin"], tytul_p, dane.get("brand")])
             ).lower()
             if szukane not in gdzie:
                 continue
-        out.append({
-            "sku": p["sku"],
-            "asin": p["asin"],
-            "title": tytul,
-            "image": dane.get("image"),
-            "price": p["price"],
-            "quantity": p["quantity"],
-            "fulfillment": p["fulfillment"],
-            # Stan znamy tylko dla wysylki wlasnej - przy FBA raport pokazuje
-            # zero, chociaz towar lezy w magazynie Amazona.
-            "out_of_stock": (
-                p["quantity"] == 0
-                and (p["fulfillment"] or "DEFAULT") == "DEFAULT"
-            ),
-            "campaigns": kampanie.get(p["sku"], 0),
-        })
+        out.append(_wiersz(
+            p["sku"], p["asin"], tytul_p, dane.get("image"),
+            p["price"], p["quantity"], p["fulfillment"],
+        ))
 
     # Najpierw te z tytulem - bez niego wiersz jest tylko kodem i mniej pomaga.
     out.sort(key=lambda p: (p["title"] is None, (p["title"] or p["sku"] or "").lower()))

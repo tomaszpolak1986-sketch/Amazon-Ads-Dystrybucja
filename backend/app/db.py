@@ -12,8 +12,25 @@ from .config import settings
 _url = settings.resolved_database_url()
 # timeout: gdy inny proces pisze (np. trwajacy sync raportow), czekaj zamiast
 # rzucac "database is locked". Na Postgresie nieistotne - to specyfika SQLite.
+#
+# Postgres z pudelka ma ustawienia dla malej maszyny sprzed dwudziestu lat:
+# 4 MB na sortowanie (kazde zestawienie za 30 dni szlo przez pliki tymczasowe;
+# hash_mem_multiplier pozwala sumowac milion wierszy w pamieci, a gdy jej
+# zabraknie, Postgres i tak zrzuca nadmiar na dysk zamiast padac)
+# i kompilacje JIT, ktora przy naszych zapytaniach kosztuje wiecej, niz daje.
+# Podajemy je PRZY POLACZENIU, nie w docker-compose - u klienta noca podmienia
+# sie tylko obraz, pliku compose aktualizacja nie rusza.
+# Parallel hash wylaczony swiadomie: rezerwuje pamiec w /dev/shm, ktorego
+# kontener ma domyslnie 64 MB, i przy wiekszym work_mem konczylby sie bledem
+# "could not resize shared memory segment".
+_PG_OPCJE = (
+    "-c work_mem=32MB -c hash_mem_multiplier=3 -c jit=off "
+    "-c enable_parallel_hash=off"
+)
 _connect_args = (
-    {"check_same_thread": False, "timeout": 30.0} if _url.startswith("sqlite") else {}
+    {"check_same_thread": False, "timeout": 30.0}
+    if _url.startswith("sqlite")
+    else {"options": _PG_OPCJE}
 )
 
 engine = create_engine(_url, echo=False, future=True, connect_args=_connect_args)
@@ -53,6 +70,74 @@ def get_session() -> Iterator[Session]:
         yield session
     finally:
         session.close()
+
+
+# Indeksy dodane po wdrozeniu: (tabela, nazwa, kolumny). `create_all` nie
+# dodaje indeksow do istniejacych tabel, wiec u klienta trzeba je zbudowac.
+_NOWE_INDEKSY = (
+    ("metrics_product_daily", "ix_product_daily_profil_data", "profile_id, date"),
+    ("metrics_search_term_daily", "ix_search_term_daily_profil_data", "profile_id, date"),
+    ("metrics_target_daily", "ix_target_daily_profil_data", "profile_id, date"),
+)
+# Zastapione przez powyzsze albo przez poczatek indeksu unikalnego.
+_ZBEDNE_INDEKSY = (
+    "ix_metrics_product_daily_date",
+    "ix_metrics_product_daily_profile_id",
+    "ix_metrics_product_daily_ad_product",
+    "ix_metrics_product_daily_ad_group_id",
+    "ix_metrics_search_term_daily_profile_id",
+    "ix_metrics_target_daily_profile_id",
+)
+_TABELE_FAKTOW = (
+    "metrics_campaign_daily", "metrics_placement_daily", "metrics_target_daily",
+    "metrics_search_term_daily", "metrics_product_daily", "total_sales_daily",
+)
+
+
+def indeksy_wydajnosci() -> None:
+    """Dostosowuje indeksy istniejacej bazy - w tle, bez blokowania tabel.
+
+    CONCURRENTLY, bo na tabeli z milionami wierszy zwykly CREATE INDEX
+    zablokowalby zapis na minute albo dwie, a startu panelu nie wolno tak
+    dlugo wstrzymywac: nocna aktualizacja czeka na niego 3 minuty i potem
+    cofa wersje. Indeks przerwany w polowie (restart) zostaje w bazie jako
+    nieprawidlowy - takiego nie omijamy, tylko budujemy od nowa.
+    """
+    import logging
+
+    log = logging.getLogger(__name__)
+    if engine.dialect.name != "postgresql":
+        return
+    try:
+        with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
+            for tabela, nazwa, kolumny in _NOWE_INDEKSY:
+                stan = conn.exec_driver_sql(
+                    "SELECT i.indisvalid FROM pg_class c JOIN pg_index i "
+                    "ON i.indexrelid = c.oid WHERE c.relname = %(n)s", {"n": nazwa},
+                ).scalar()
+                if stan is True:
+                    continue
+                if stan is False:
+                    conn.exec_driver_sql(f'DROP INDEX CONCURRENTLY IF EXISTS "{nazwa}"')
+                log.info("Buduje indeks %s (jednorazowo, w tle)...", nazwa)
+                conn.exec_driver_sql(
+                    f'CREATE INDEX CONCURRENTLY IF NOT EXISTS "{nazwa}" ON "{tabela}" ({kolumny})'
+                )
+                conn.exec_driver_sql(f'ANALYZE "{tabela}"')
+                log.info("Indeks %s gotowy", nazwa)
+            for nazwa in _ZBEDNE_INDEKSY:
+                conn.exec_driver_sql(f'DROP INDEX CONCURRENTLY IF EXISTS "{nazwa}"')
+            # Pobieranie kasuje i wstawia te same dni co kilka godzin. Domyslny
+            # prog autovacuum (20% tabeli) przy milionach wierszy oznacza
+            # setki tysiecy martwych wierszy, przez ktore przedziera sie kazde
+            # zestawienie - sprzatamy czesciej i czesciej odswiezamy statystyki.
+            for tabela in _TABELE_FAKTOW:
+                conn.exec_driver_sql(
+                    f'ALTER TABLE "{tabela}" SET (autovacuum_vacuum_scale_factor = 0.05, '
+                    "autovacuum_analyze_scale_factor = 0.02)"
+                )
+    except Exception:  # noqa: BLE001 - panel dziala i bez tego, tylko wolniej
+        log.exception("Nie udalo sie dostosowac indeksow - sprobuje przy nastepnym starcie")
 
 
 def init_db() -> None:

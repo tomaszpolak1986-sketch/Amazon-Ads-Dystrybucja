@@ -5,6 +5,14 @@ const nextConfig: NextConfig = {
   // node_modules i zrodel. Na serwerze z 3,8 GB RAM ma to znaczenie nie tylko
   // dla rozmiaru obrazu, ale i dla tego, ile zostaje na sam proces.
   output: "standalone",
+  // Domyslnie Next przerywa przekazywanie /api po 30 s i oddaje przegladarce
+  // golutkie "500 Internal Server Error" - tak wygladal blad w Sugestiach
+  // u klienta, choc backend dalej liczyl. Ciezkie zestawienia na duzym koncie
+  // (widok wszystkich rynkow, pierwsze otwarcie po pobraniu danych) potrafia
+  // trwac dluzej; lepiej poczekac niz pokazac blad, ktorego nie ma.
+  experimental: {
+    proxyTimeout: 300_000,
+  },
   // Proxy /api/* na backend PO STRONIE SERWERA Next.js, zamiast wywolywac go
   // wprost z przegladarki pod innym hostem (NEXT_PUBLIC_API_URL). Bez tego
   // strona i API sa dla przegladarki dwoma roznymi "site" (np. amazon.lan vs

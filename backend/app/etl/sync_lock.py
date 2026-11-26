@@ -33,6 +33,11 @@ def zwolnij() -> None:
     global _CO_TRWA
     _CO_TRWA = None
     _LOCK.release()
+    # Nowe dane w bazie - zapamietane zestawienia sa nieaktualne
+    from .. import pamiec_odpowiedzi
+
+    pamiec_odpowiedzi.uniewaznij("pobieranie")
+    pamiec_odpowiedzi.rozgrzej_w_tle()
 
 
 @contextmanager

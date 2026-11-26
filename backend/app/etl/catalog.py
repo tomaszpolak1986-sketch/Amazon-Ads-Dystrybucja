@@ -243,24 +243,31 @@ def sync_all(
     return podsumowanie
 
 
+PORCJA_ODCZYTU = 10_000
+
+
 def lookup(
     session: Session, marketplace_id: str | None, asiny: list[str]
 ) -> dict[str, dict[str, Any]]:
     """Dane katalogowe gotowe do dolaczenia do wiersza tabeli."""
     if not asiny:
         return {}
-    warunki = [CatalogItem.asin.in_(asiny)]
-    if marketplace_id:
-        warunki.append(CatalogItem.marketplace_id == marketplace_id)
-
     out: dict[str, dict[str, Any]] = {}
-    for r in session.execute(select(CatalogItem).where(*warunki)).scalars():
-        # Przy widoku laczonym moze byc kilka rynkow - pierwszy wygrywa,
-        # bo miniatura tego samego ASIN-u jest wszedzie ta sama.
-        out.setdefault(r.asin, {
-            "title": r.title,
-            "brand": r.brand,
-            "image": r.image_small,
-            "image_full": r.image_main,
-        })
+    # Porcjami: Postgres przyjmuje najwyzej 65 535 parametrow w zapytaniu,
+    # a pelna lista ofert jednego rynku potrafi miec ich wiecej - wyszukiwarka
+    # produktow w nowej kampanii konczyla sie przez to bledem 500.
+    unikalne = sorted(set(asiny))
+    for i in range(0, len(unikalne), PORCJA_ODCZYTU):
+        warunki = [CatalogItem.asin.in_(unikalne[i : i + PORCJA_ODCZYTU])]
+        if marketplace_id:
+            warunki.append(CatalogItem.marketplace_id == marketplace_id)
+        for r in session.execute(select(CatalogItem).where(*warunki)).scalars():
+            # Przy widoku laczonym moze byc kilka rynkow - pierwszy wygrywa,
+            # bo miniatura tego samego ASIN-u jest wszedzie ta sama.
+            out.setdefault(r.asin, {
+                "title": r.title,
+                "brand": r.brand,
+                "image": r.image_small,
+                "image_full": r.image_main,
+            })
     return out

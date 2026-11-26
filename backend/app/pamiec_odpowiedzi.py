@@ -177,13 +177,18 @@ def rozgrzej_w_tle() -> None:
 
 # --- Zakresy, ktorych uzytkownik naprawde uzywa ---------------------------
 # Domyslne 30 dni to tylko punkt wyjscia: przelacznik okresu zapamietuje
-# wybor w przegladarce, wiec ktos pracujacy na 60 dniach otwieralby co dzien
-# ekrany niepoliczone. Zapisujemy wiec dlugosci okresow (konczacych sie
-# wczoraj) z prawdziwych zapytan i rozgrzewamy te, ktorych uzyto ostatnio.
-# Plik w data/, zeby przetrwal restart i nocna aktualizacje.
+# wybor w przegladarce, a do tego jest wlasny zakres dat (np. caly
+# pazdziernik). Zapisujemy zakresy z prawdziwych zapytan i rozgrzewamy te,
+# ktorych uzyto ostatnio:
+#   * 30 dni - zawsze (domyslny widok),
+#   * do 2 innych okresow konczacych sie wczoraj (7/14/60/90 dni),
+#   * do 2 wlasnych zakresow dat.
+# Wiecej nie ma sensu - przeliczanie zakresow, ktorych nikt nie otwiera,
+# tylko obciaza serwer. Plik w data/, zeby przetrwal restart i aktualizacje.
 
 _ZAKRESY_PLIK = "zakresy-ekranow.json"
-MAKS_ZAKRESOW = 3          # ile roznych dlugosci okresu rozgrzewamy
+MAKS_OKRESOW = 2           # okresy "N dni do wczoraj" poza 30
+MAKS_WLASNYCH = 2          # wlasne zakresy dat
 ZAKRES_WAZNY_DNI = 14      # nieuzywany dluzej - wypada z listy
 _zakresy: dict[str, str] | None = None
 
@@ -200,14 +205,19 @@ def _wczytaj_zakresy() -> dict[str, str]:
         import json
 
         try:
-            _zakresy = dict(json.loads(_plik_zakresow().read_text(encoding="utf-8")))
-        except (OSError, ValueError, TypeError):
+            _zakresy = {str(k): str(v) for k, v in
+                        json.loads(_plik_zakresow().read_text(encoding="utf-8")).items()}
+        except (OSError, ValueError, TypeError, AttributeError):
             _zakresy = {}
     return _zakresy
 
 
 def zanotuj_zakres(start: str | None, end: str | None) -> None:
-    """Dlugosc okresu z zapytania przegladarki, gdy konczy sie wczoraj."""
+    """Zakres z zapytania przegladarki: dlugosc okresu albo wlasne daty.
+
+    Klucz "60" to okres 60 dni do wczoraj, "2026-10-01..2026-10-31" - wlasny
+    zakres. Wartosc to chwila ostatniego uzycia (do kolejnosci).
+    """
     import datetime as dt
     import json
 
@@ -218,42 +228,69 @@ def zanotuj_zakres(start: str | None, end: str | None) -> None:
     except ValueError:
         return
     dzis = dt.date.today()
+    if a > b or b > dzis or (b - a).days > 400:
+        return
     # Przegladarka liczy "wczoraj" w czasie polskim, serwer w UTC - po
     # polnocy przez godzine to dwa rozne dni. Oba traktujemy jako "do wczoraj".
-    if b not in (dzis - dt.timedelta(days=1), dzis):
-        return
-    dni = (b - a).days + 1
-    if not 1 <= dni <= 95:
-        return
+    if b in (dzis - dt.timedelta(days=1), dzis):
+        dni = (b - a).days + 1
+        if not 1 <= dni <= 95:
+            return
+        klucz = str(dni)
+    else:
+        klucz = f"{a.isoformat()}..{b.isoformat()}"
+
     zakresy = _wczytaj_zakresy()
-    klucz, teraz = str(dni), dzis.isoformat()
+    teraz = dt.datetime.now().isoformat()
     if zakresy.get(klucz) == teraz:
         return
     with _lock:
         zakresy[klucz] = teraz
+        # Stare wpisy nie maja po co lezec w pliku
+        granica = (dzis - dt.timedelta(days=ZAKRES_WAZNY_DNI)).isoformat()
+        for k in [k for k, v in zakresy.items() if v < granica]:
+            zakresy.pop(k, None)
+        dane = json.dumps(zakresy)
     try:
         _plik_zakresow().parent.mkdir(parents=True, exist_ok=True)
-        _plik_zakresow().write_text(json.dumps(zakresy), encoding="utf-8")
+        _plik_zakresow().write_text(dane, encoding="utf-8")
     except OSError:
         pass
 
 
-def zakresy_do_rozgrzania() -> list[int]:
-    """30 dni zawsze, do tego ostatnio uzywane dlugosci okresu."""
+def zakresy_do_rozgrzania(koniec=None) -> list[tuple[str, str]]:
+    """(start, end) do policzenia - ostatnio uzywane najpierw, 30 dni zawsze."""
     import datetime as dt
 
+    koniec = koniec or (dt.date.today() - dt.timedelta(days=1))
     granica = (dt.date.today() - dt.timedelta(days=ZAKRES_WAZNY_DNI)).isoformat()
     uzywane = sorted(
-        ((d, int(k)) for k, d in _wczytaj_zakresy().items() if d >= granica),
+        ((kiedy, k) for k, kiedy in _wczytaj_zakresy().items() if kiedy >= granica),
         reverse=True,
     )
-    out: list[int] = []
-    for _, dni in uzywane:
-        if dni not in out:
-            out.append(dni)
-    if 30 not in out:
-        out.append(30)
-    return out[:MAKS_ZAKRESOW] if 30 in out[:MAKS_ZAKRESOW] else out[:MAKS_ZAKRESOW - 1] + [30]
+
+    def okres(dni: int) -> tuple[str, str]:
+        return (koniec - dt.timedelta(days=dni - 1)).isoformat(), koniec.isoformat()
+
+    okresy: list[tuple[str, tuple[str, str]]] = []
+    wlasne: list[tuple[str, tuple[str, str]]] = []
+    for kiedy, k in uzywane:
+        if k.isdigit():
+            if int(k) != 30 and len(okresy) < MAKS_OKRESOW:
+                okresy.append((kiedy, okres(int(k))))
+        elif ".." in k and len(wlasne) < MAKS_WLASNYCH:
+            a, b = k.split("..", 1)
+            wlasne.append((kiedy, (a, b)))
+
+    trzydziesci = max((kiedy for kiedy, k in uzywane if k == "30"), default="")
+    wszystkie = sorted(
+        [(trzydziesci, okres(30)), *okresy, *wlasne], key=lambda x: x[0], reverse=True,
+    )
+    out: list[tuple[str, str]] = []
+    for _, zakres in wszystkie:
+        if zakres not in out:
+            out.append(zakres)
+    return out
 
 
 def adresy_ekranow(rynki: list[int], start: str, end: str) -> list[str]:
@@ -341,10 +378,9 @@ def _rozgrzej() -> None:
                 with session_scope() as s:
                     rynki = [p["profile_id"] for p in queries.profiles(s)]
                 adresy: list[str] = []
-                # Najpierw ostatnio uzywany okres - to on bedzie otwarty
-                for dni in zakresy_do_rozgrzania():
-                    poczatek = koniec - dt.timedelta(days=dni - 1)
-                    adresy += adresy_ekranow(rynki, poczatek.isoformat(), koniec.isoformat())
+                # Najpierw ostatnio uzywany zakres - to on bedzie otwarty
+                for start, end in zakresy_do_rozgrzania(koniec):
+                    adresy += adresy_ekranow(rynki, start, end)
                 t0 = time.monotonic()
                 gotowe = 0
                 with httpx.Client(

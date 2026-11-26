@@ -65,8 +65,26 @@ _w_toku: dict[str, asyncio.Future] = {}
 _TYLKO_DECYZJE = (
     "/api/suggestions/queue", "/api/suggestions/dismiss",
     "/api/suggestions/dismissed/", "/api/actions/", "/api/plans/cancel",
-    "/api/auth/",
 )
+
+# Zapytania POST, ktore niczego w danych nie zmieniaja: logowanie, odblokowanie
+# ustawien, testy polaczenia, podglady. Wczesniej kasowaly cala pamiec - samo
+# zalogowanie sie rano wyrzucalo ekrany przeliczone w nocy. Pobieranie
+# (/api/sync/) tez tu jest: dane zmieniaja sie dopiero w trakcie, a koniec
+# przebiegu zglasza `sync_lock.zwolnij()`.
+_BEZ_ZMIAN = (
+    "/api/auth/", "/api/ustawienia/admin/odblokuj", "/api/ustawienia/admin/zablokuj",
+    "/api/ustawienia/amazon/ads/test", "/api/ustawienia/amazon/sp/test",
+    "/api/total-sales/preview", "/api/sync/",
+)
+
+
+def _zmienia_dane(request: Request) -> bool:
+    sciezka = request.url.path
+    if sciezka.startswith(_BEZ_ZMIAN):
+        return False
+    # Podglad reguly: /api/rules/{id}/preview
+    return not (sciezka.startswith("/api/rules/") and sciezka.endswith("/preview"))
 
 
 def uniewaznij(_powod: str = "", dane: bool = True, miekko: bool = False) -> None:
@@ -528,11 +546,17 @@ def _odczytaj(
 async def middleware(request: Request, call_next):
     if request.method not in ("GET", "HEAD", "OPTIONS"):
         odpowiedz = await call_next(request)
-        # Zmiana mogla sie udac czesciowo - kasujemy niezaleznie od kodu.
-        uniewaznij(
-            request.url.path,
-            dane=not request.url.path.startswith(_TYLKO_DECYZJE),
-        )
+        if _zmienia_dane(request):
+            # Zmiana mogla sie udac czesciowo - kasujemy niezaleznie od kodu.
+            uniewaznij(
+                request.url.path,
+                dane=not request.url.path.startswith(_TYLKO_DECYZJE),
+            )
+            # I liczymy od nowa w tle - inaczej po pierwszym "do kolejki"
+            # wszystkie ekrany bylyby wolne az do nastepnego pobrania danych.
+            # Kilka klikniec z rzedu nie szkodzi: rozgrzewka czeka minute
+            # spokoju i zaczyna od poczatku.
+            rozgrzej_w_tle()
         return odpowiedz
 
     if not _do_zapamietania(request):

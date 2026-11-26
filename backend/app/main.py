@@ -46,6 +46,8 @@ def _scheduled_rules_tick() -> None:
     """
     from .db import session_scope
 
+    from .api import actions as actions_mod
+
     try:
         with session_scope() as session:
             result = rules_engine.run_due_rules(session)
@@ -53,6 +55,14 @@ def _scheduled_rules_tick() -> None:
             log.info("Scheduler: uruchomiono %s regul", result["ran"])
     except Exception:
         log.exception("Scheduler regul: przebieg nie powiodl sie")
+
+    # Przy okazji sprzatamy porzucone szkice planow. Osobny try, bo blad
+    # sprzatania nie moze zabrac uruchamiania regul - i odwrotnie.
+    try:
+        with session_scope() as session:
+            actions_mod.sprzataj_szkice(session)
+    except Exception:
+        log.exception("Sprzatanie szkicow planow nie powiodlo sie")
 
 
 def _scheduled_sb_sd_refresh() -> None:
@@ -1525,6 +1535,29 @@ def get_negative_candidates(
     )
 
 
+@app.get("/api/home/today")
+def get_today(
+    profile_id: int | None = ProfileParam,
+    limit: int = Query(5, ge=1, le=20),
+    rng: DateRange = Depends(),
+    session: Session = Depends(get_session),
+):
+    """Najwazniejsze pozycje na dzis - po pieniadzach, nie po liczbie.
+
+    Lista sugestii liczy na tym koncie ponad piecset pozycji. To nie jest
+    lista do przerobienia, tylko archiwum: nikt nie zaczyna dnia od pytania
+    "ktora z 557". Tutaj wychodzi kilka o najwiekszej wadze pienieznej, reszta
+    czeka, az te znikna.
+    """
+    rows = queries.all_suggestions(session, profile_id, rng.start, rng.end, True, 900)
+    gorne = rows[:limit]
+    return {
+        "total": len(rows),
+        "total_impact": round(sum(r.get("impact") or 0 for r in rows), 2),
+        "items": gorne,
+    }
+
+
 @app.get("/api/home/status")
 def get_home_status(
     profile_id: int | None = ProfileParam,
@@ -1715,6 +1748,35 @@ def get_budget_capped(
 ):
     """Kampanie, ktore regularnie wyczerpuja dzienny budzet."""
     return queries.budget_capped(session, profile_id, rng.start, rng.end)
+
+
+@app.get("/api/opportunities/scale")
+def get_scale(
+    profile_id: int | None = ProfileParam,
+    rng: DateRange = Depends(),
+    session: Session = Depends(get_session),
+):
+    """Gdzie dolozyc - rynki i typy reklam bijace srednia przy malym udziale."""
+    return queries.gdzie_dolozyc(session, profile_id, rng.start, rng.end)
+
+
+@app.get("/api/opportunities/global-negatives")
+def get_global_negatives(
+    profile_id: int | None = ProfileParam,
+    min_campaigns: int = Query(2, ge=2, description="w ilu kampaniach fraza musi sie palic"),
+    min_cost: float = Query(1.0, ge=0),
+    limit: int = Query(300, ge=1, le=2000),
+    rng: DateRange = Depends(),
+    session: Session = Depends(get_session),
+):
+    """Frazy palace pieniadze w kilku kampaniach naraz, bez sprzedazy nigdzie.
+
+    Jeden wiersz na fraze zamiast jednego na kazda pare kampania+grupa - bo
+    decyzja jest jedna, a miejsc bywa pieć.
+    """
+    return queries.wykluczenia_globalne(
+        session, profile_id, rng.start, rng.end, min_campaigns, min_cost, limit
+    )
 
 
 @app.get("/api/opportunities/harvest")
@@ -2208,6 +2270,39 @@ def get_rules_meta():
 def get_rules(session: Session = Depends(get_session)):
     rules = session.execute(select(Rule).order_by(Rule.id)).scalars().all()
     return [rules_engine.to_dict(r, _last_run(session, r.id)) for r in rules]
+
+
+@app.post("/api/rules/preview")
+def post_rule_draft_preview(
+    payload: RulePayload,
+    profile_id: int = Query(..., description="rynek, na ktorym liczymy podglad"),
+    session: Session = Depends(get_session),
+):
+    """Co zlapalaby regula, ktorej jeszcze nie ma.
+
+    Dotad podglad dzialal wylacznie dla reguly JUZ ZAPISANEJ, wiec kolejnosc
+    byla odwrotna niz decyzja: najpierw zapisz cos, czego skutkow nie znasz,
+    potem sprawdz, czy nie zlapie polowy konta. Przy regulach, ktore same
+    kolejkuja zmiany, to zly moment na niespodzianke.
+
+    Niczego nie zapisuje - obiekt reguly powstaje tylko w pamieci.
+    """
+    data = payload.model_dump()
+    try:
+        rules_engine.validate(data)
+    except rules_engine.RuleError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+    rule = Rule(**data)
+    rule.id = 0  # nigdy nie trafia do bazy; potrzebne tylko do logow w silniku
+    try:
+        return rules_engine.preview_rule(session, rule, profile_id)
+    except rules_engine.RuleError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    finally:
+        # `Rule(**data)` sam z siebie nie jest w sesji, ale gdyby silnik
+        # dotknal relacji, SQLAlchemy mogloby go dociagnac przy flushu.
+        session.expunge_all()
 
 
 @app.post("/api/rules")

@@ -114,6 +114,50 @@ export interface OffAmazonResult {
   items: OffAmazonRow[];
 }
 
+export interface ScaleRow {
+  /** "market" albo "ad_product" - jedna tabela, dwa rodzaje wierszy. */
+  kind: string;
+  name: string | null;
+  cost: number | null;
+  sales: number | null;
+  acos: number | null;
+  /** Udzial w calym wydatku konta, w procentach. */
+  share_of_cost: number;
+  acos_ref: number | null;
+  /** Bije srednia I ma maly udzial - oba warunki naraz. */
+  worth_scaling: boolean;
+}
+
+export interface ScaleResult {
+  acos_ref: number | null;
+  markets: ScaleRow[];
+  ad_products: ScaleRow[];
+}
+
+export interface TodayResult {
+  /** Ile sugestii jest w ogole - zeby bylo widac, ile zostaje poza piatka. */
+  total: number;
+  /** Suma wagi pienieznej calej listy, nie tylko pokazanych. */
+  total_impact: number;
+  items: SuggestionRow[];
+}
+
+export interface GlobalNegativeRow {
+  search_term: string;
+  /** W ilu roznych kampaniach fraza sie pali. */
+  campaigns: number;
+  /** Konkretne miejsca - wykluczenie zaklada sie w kazdym z nich. */
+  places: Array<{
+    campaign_id: string;
+    ad_group_id: string;
+    campaign_name: string | null;
+    cost: number;
+  }>;
+  place_count: number;
+  cost: number;
+  clicks: number;
+}
+
 export interface SuggestionsResponse {
   /** Prog kosztu, powyzej ktorego regula w tle tworzy plan sama */
   threshold: number;
@@ -1138,6 +1182,13 @@ export const api = {
   negativeTargets: (p?: Params) => apiGet<NegativeTargetRow[]>("/api/negatives/targets", p),
   negatives: (p: RangeParams) => apiGet<SearchTermRow[]>("/api/opportunities/negatives", p),
   harvest: (p: RangeParams) => apiGet<SearchTermRow[]>("/api/opportunities/harvest", p),
+  globalNegatives: (p: RangeParams) =>
+    apiGet<GlobalNegativeRow[]>("/api/opportunities/global-negatives", p),
+  today: (p: RangeParams & { limit?: number }) =>
+    apiGet<TodayResult>("/api/home/today", p),
+  scale: (p: RangeParams) => apiGet<ScaleResult>("/api/opportunities/scale", p),
+  previewDraftRule: (profile_id: number, rule: RuleInput) =>
+    apiPost<RulePreview>("/api/rules/preview", rule, { profile_id }),
   ngrams: (p: RangeParams) => apiGet<NgramResult>("/api/ngrams", p),
   homeStatus: (p: RangeParams) => apiGet<HomeStatus>("/api/home/status", p),
   monthly: (profile_id?: number | null, months = 6) =>

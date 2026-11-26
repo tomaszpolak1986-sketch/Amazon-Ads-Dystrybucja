@@ -194,6 +194,7 @@ export default function RulesPage() {
             <RuleEditor
               key={editing.seq}
               meta={meta.data}
+              profileId={profileId}
               initial={editing.rule}
               onSave={save}
               onCancel={() => setEditing(null)}

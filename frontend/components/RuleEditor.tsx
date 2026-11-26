@@ -2,7 +2,8 @@
 
 import { Plus, Trash2, X } from "lucide-react";
 import { useState } from "react";
-import type { Condition, RuleInput, RuleScope, RulesMeta } from "@/lib/api";
+import { api } from "@/lib/api";
+import type { Condition, RuleInput, RulePreview, RuleScope, RulesMeta } from "@/lib/api";
 import { Badge, Button } from "./ui";
 
 const METRIC_LABEL: Record<string, string> = {
@@ -56,6 +57,7 @@ const label = "mb-1 block text-xs font-medium text-muted";
 export function RuleEditor({
   meta,
   initial,
+  profileId,
   onSave,
   onCancel,
   saving,
@@ -63,12 +65,37 @@ export function RuleEditor({
 }: {
   meta: RulesMeta;
   initial: RuleInput;
+  /** Rynek, na ktorym liczy sie podglad. null = widok zbiorczy, podglad niedostepny. */
+  profileId: number | null;
   onSave: (rule: RuleInput) => void;
   onCancel: () => void;
   saving: boolean;
   error: string | null;
 }) {
   const [rule, setRule] = useState<RuleInput>(initial);
+  // Podglad PRZED zapisem. Dotad dzialal wylacznie dla reguly juz zapisanej,
+  // wiec kolejnosc byla odwrotna niz decyzja: najpierw zapisz cos, czego
+  // skutkow nie znasz, potem sprawdz, czy nie lapie polowy konta.
+  const [podglad, setPodglad] = useState<RulePreview | null>(null);
+  const [liczy, setLiczy] = useState(false);
+  const [bladPodgladu, setBladPodgladu] = useState<string | null>(null);
+
+  async function policz() {
+    if (profileId === null) {
+      setBladPodgladu("Wybierz konkretny rynek - podgląd liczy się dla jednego.");
+      return;
+    }
+    setLiczy(true);
+    setBladPodgladu(null);
+    setPodglad(null);
+    try {
+      setPodglad(await api.previewDraftRule(profileId, rule));
+    } catch (err) {
+      setBladPodgladu((err as Error).message.slice(0, 180));
+    } finally {
+      setLiczy(false);
+    }
+  }
 
   const allowedActions = meta.scope_actions[rule.scope] ?? [];
   const conditions = rule.conditions.all ?? [];
@@ -352,7 +379,37 @@ export function RuleEditor({
         )}
       </div>
 
+      {(podglad || bladPodgladu) && (
+        <div className="rounded-lg border border-border bg-surface-2 px-3 py-2 text-xs">
+          {bladPodgladu ? (
+            <span className="text-bad">{bladPodgladu}</span>
+          ) : podglad ? (
+            <span>
+              Na dzisiejszych danych reguła oceniłaby{" "}
+              <span className="tnum font-medium">{podglad.evaluated}</span> pozycji i złapała{" "}
+              <span className="tnum font-medium">{podglad.matched}</span>
+              {podglad.limited_to !== podglad.matched && (
+                <>
+                  , z czego do kolejki trafiłoby{" "}
+                  <span className="tnum font-medium">{podglad.limited_to}</span>
+                </>
+              )}
+              . Okno: {podglad.range.start} → {podglad.range.end}.
+              {podglad.matched === 0 && " Warunki są zbyt ostre - nic nie pasuje."}
+            </span>
+          ) : null}
+        </div>
+      )}
+
       <div className="flex items-center justify-end gap-2 border-t border-border pt-3">
+        <Button
+          variant="ghost"
+          onClick={policz}
+          disabled={liczy || conditions.length === 0}
+          title="Sprawdza na prawdziwych danych, ile pozycji reguła by złapała. Niczego nie zapisuje."
+        >
+          {liczy ? "Liczę…" : "Policz, co złapie"}
+        </Button>
         <Button variant="ghost" onClick={onCancel}>
           <X className="size-4" /> Anuluj
         </Button>

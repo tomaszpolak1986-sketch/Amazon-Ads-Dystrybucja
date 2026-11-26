@@ -157,12 +157,30 @@ def _create_plan(
             "duplicate_of_pending": True,
         }
 
+    # SZKIC vs POZYCJA W KOLEJCE - to dwie rozne rzeczy, ktore do tej pory
+    # ladowaly w jednym worku.
+    #
+    # Plan powstaje JUZ w chwili policzenia, czyli gdy tylko zmienisz wartosc
+    # w rozwijanej liscie albo klikniesz akcje zbiorcza - zanim cokolwiek
+    # potwierdzisz. Pasek, ktory sie wtedy pokazuje, dotyczy planu, ktory
+    # fizycznie juz jest w bazie. Jesli zamkniesz karte, przejdziesz dalej
+    # albo "Odrzuc" nie dojdzie do serwera, plan zostaje - a nic go nie
+    # sprzata, bo `expires_at` jest zapisywane i przez nikogo nieuzywane.
+    # Tak wlasnie kolejka zapelniala sie pozycjami, ktorych nikt swiadomie
+    # nie wyslal.
+    #
+    # Rozroznienie idzie po zrodle i to nie jest skrot mysłowy: przebieg
+    # MANUAL zawsze konczy sie od razu zatwierdzeniem albo odrzuceniem
+    # w pasku, bo panel nie ma dla niego innej sciezki. SUGGESTION i RULE
+    # trafiaja do kolejki swiadomie i maja w niej czekac.
+    szkic = source == "MANUAL"
     plan = PendingPlan(
         id=str(uuid.uuid4()),
         profile_id=profile_id,
         kind=kind,
         summary=summary,
-        payload={**payload, "planned": planned, "source": source, "rule_id": rule_id},
+        payload={**payload, "planned": planned, "source": source,
+                 "rule_id": rule_id, "draft": szkic},
         item_count=len(planned),
         status="PENDING",
         expires_at=now + dt.timedelta(minutes=PLAN_TTL_MINUTES),
@@ -1747,6 +1765,22 @@ def plan_negative_targets(
 OCENY = {"4-5": "4-5", "3-5": "3-5", "1-5": "1-5"}
 
 
+def _odcisk_wyrazenia(wyrazenie: Any) -> str:
+    """Porownywalna postac wyrazenia targetu - bez wplywu kolejnosci klauzul."""
+    if not isinstance(wyrazenie, list):
+        return json.dumps(wyrazenie, sort_keys=True)
+    klauzule = [
+        (
+            (str(k.get("type")), str(k.get("value")))
+            if isinstance(k, dict) else ("?", str(k))
+        )
+        for k in wyrazenie
+    ]
+    # Sortujemy KROTKI, nie slowniki - tych Python nie potrafi porownac
+    # i caly plan konczyl sie bledem 500.
+    return json.dumps(sorted(klauzule))
+
+
 def plan_add_targets(
     session: Session,
     profile_id: int,
@@ -1771,8 +1805,12 @@ def plan_add_targets(
     planned: list[dict[str, Any]] = []
     pominiete: list[dict[str, Any]] = []
 
+    # Porownanie MUSI byc niewrazliwe na kolejnosc klauzul. Amazon przysyla
+    # je w swojej kolejnosci (kategoria, marka, cena, ocena), a panel sklada
+    # we wlasnej (kategoria, marka, ocena, cena) - samo `json.dumps` listy
+    # uznawalo wiec te same dwa targety za rozne.
     istniejace = {
-        (str(ag), json.dumps(e, sort_keys=True))
+        (str(ag), _odcisk_wyrazenia(e))
         for ag, e in session.execute(
             select(Target.ad_group_id, Target.expression)
             .where(
@@ -1784,6 +1822,22 @@ def plan_add_targets(
             )
         ).all()
         if e
+    }
+
+    # Proby, ktore Amazon odrzucil jako duplikat. Porownujemy po opisie
+    # ("kategoria X + marka Y"), bo on powstaje deterministycznie z tych samych
+    # pol co wyrazenie, a w historii nie trzymamy samego wyrazenia.
+    odrzucone_wczesniej = {
+        (str(eid), str(nowa).split(" - stawka")[0])
+        for eid, nowa in session.execute(
+            select(ChangeLog.entity_id, ChangeLog.new_value).where(
+                ChangeLog.profile_id == profile_id,
+                ChangeLog.field == "product_target",
+                ChangeLog.status.in_(["FAILED", "PARTIAL"]),
+                ChangeLog.error.ilike("%duplicateValueError%"),
+            )
+        ).all()
+        if nowa
     }
 
     for it in items:
@@ -1822,11 +1876,25 @@ def plan_add_targets(
             wyrazenie.append({"type": "ASIN_PRICE_LESS_THAN", "value": str(do)})
             opis.append("cena ponizej " + str(do))
 
-        klucz = (str(it.get("adGroupId")), json.dumps(wyrazenie, sort_keys=True))
+        klucz = (str(it.get("adGroupId")), _odcisk_wyrazenia(wyrazenie))
         if klucz in istniejace:
             pominiete.append({
                 "keyword": " + ".join(opis),
                 "reason": "Taki target juz istnieje w tej grupie reklam.",
+            })
+            continue
+        # Amazon blokuje tez targety ZARCHIWIZOWANE, a tych panel nie zna:
+        # synchronizacja encji pobiera wylacznie ENABLED i PAUSED. Jedynym
+        # sladem po takiej kolizji jest wlasna historia - raz odrzucona proba
+        # zostaje tu zapamietana, zeby nie wracac pod te sama sciane.
+        if (str(it.get("adGroupId")), " + ".join(opis)) in odrzucone_wczesniej:
+            pominiete.append({
+                "keyword": " + ".join(opis),
+                "reason": (
+                    "Amazon odrzucil juz taki target jako duplikat - "
+                    "najpewniej lezy w tej grupie jako zarchiwizowany, czego "
+                    "panel nie widzi. Zmien zawezenie ceny albo oceny."
+                ),
             })
             continue
         istniejace.add(klucz)
@@ -3130,6 +3198,10 @@ def pending_plans(session: Session, profile_id: int | None = None, limit: int = 
 
     out = []
     for p in plans:
+        # Szkice z paska podgladu nie naleza do kolejki - albo zostana zaraz
+        # zatwierdzone, albo porzucone i skasowane przez `sprzataj_szkice`.
+        if (p.payload or {}).get("draft"):
+            continue
         planned = (p.payload or {}).get("planned", [])
         # Nazwy pobieramy raz na plan, nie raz na pozycje
         names = _entity_names(session, planned)
@@ -3150,6 +3222,36 @@ def pending_plans(session: Session, profile_id: int | None = None, limit: int = 
             "planned": [_describe_item(item, names, context) for item in planned],
         })
     return out
+
+
+def sprzataj_szkice(session: Session) -> int:
+    """Kasuje porzucone szkice - policzone w pasku i niepotwierdzone.
+
+    Plan z paska podgladu zyje tylko tak dlugo, ile trwa decyzja. Gdy
+    uzytkownik zamknie karte zamiast kliknac "Odrzuc", nikt go nie usunie:
+    `expires_at` jest zapisywane od poczatku i do tej pory nic go nie
+    czytalo. Tutaj wreszcie cos czyta.
+
+    Dotyczy WYLACZNIE szkicow. Pozycje wyslane z listy sugestii i utworzone
+    przez reguly czekaja w kolejce bez ograniczenia czasu - tak ma byc.
+    """
+    granica = utcnow()
+    szkice = session.execute(
+        select(PendingPlan).where(
+            PendingPlan.status == "PENDING",
+            PendingPlan.expires_at < granica,
+        )
+    ).scalars().all()
+
+    usuniete = 0
+    for plan in szkice:
+        if not (plan.payload or {}).get("draft"):
+            continue
+        session.delete(plan)
+        usuniete += 1
+    if usuniete:
+        log.info("Sprzatanie: usunieto %s porzuconych szkicow planow", usuniete)
+    return usuniete
 
 
 def recent_changes(session: Session, profile_id: int | None = None, limit: int = 200):

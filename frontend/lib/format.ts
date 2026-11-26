@@ -111,7 +111,12 @@ export function opisBledu(errors: unknown): string {
   const lista = Array.isArray(errors) ? errors : Object.values(errors as object);
   const pierwszy = lista[0];
   if (!pierwszy) return "";
-  if (typeof pierwszy === "string") return pierwszy.slice(0, 220);
+  // Backend czesto sklada blad Amazona w gotowy napis ("Amazon odrzucil
+  // target: [{'errorType': ...}]"). Pierwsza wersja tego tlumaczenia
+  // konczyla sie tutaj - `return` na napisie wyprzedzal rozpoznawanie
+  // przyczyny, wiec w pasku dalej stal surowy JSON. Napis idzie teraz tym
+  // samym torem co obiekt.
+  if (typeof pierwszy === "string") return nazwij(pierwszy);
   const o = pierwszy as Record<string, unknown>;
   const zagniezdzone = Array.isArray(o.errors) ? o.errors[0] : null;
   const kandydaci = [
@@ -124,5 +129,38 @@ export function opisBledu(errors: unknown): string {
   // Bierzemy pierwsza wartosc, ktora jest tekstem. Wczesniej pole `details`
   // bywalo obiektem i String() robil z niego "[object Object]".
   const tekst = kandydaci.find((k) => typeof k === "string" && k.trim());
-  return String(tekst ?? JSON.stringify(pierwszy)).slice(0, 220);
+  return nazwij(String(tekst ?? JSON.stringify(pierwszy)));
 }
+
+/**
+ * Zamienia odpowiedz Amazona na zdanie, z ktorym da sie cos zrobic.
+ *
+ * Czesc bledow ma wylacznie nazwe techniczna i sciezke w rodzaju
+ * "$.targetingClauses[0].expression" - dla czytajacego to zero informacji.
+ */
+function nazwij(surowy: string): string {
+  for (const [wzorzec, opis] of PRZYCZYNY) {
+    if (surowy.includes(wzorzec)) return opis;
+  }
+  return surowy.slice(0, 220);
+}
+
+/** Nazwa bledu Amazona -> zdanie, z ktorym da sie cos zrobic. */
+const PRZYCZYNY: Array<[string, string]> = [
+  [
+    "duplicateValueError",
+    "Amazon ma już taki target w tej grupie reklam - także wtedy, gdy jest " +
+      "wstrzymany albo zarchiwizowany, czego panel nie widzi. Zmień zawężenie " +
+      "(cena, ocena) albo poszukaj go na liście targetowania.",
+  ],
+  [
+    "entityNotFoundError",
+    "Amazon nie zna już tego elementu - mógł zostać usunięty po stronie konsoli. " +
+      "Odśwież dane i spróbuj ponownie.",
+  ],
+  [
+    "INVALID_ARGUMENT",
+    "Amazon odrzucił wartość jako niedozwoloną. Sprawdź stawkę i zawężenia - " +
+      "część ustawień ma własne limity.",
+  ],
+];

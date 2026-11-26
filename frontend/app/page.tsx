@@ -2,6 +2,8 @@
 
 import { useMemo } from "react";
 import { Scorecard } from "@/components/Scorecard";
+import { Today } from "@/components/Today";
+import { WhereToScale } from "@/components/WhereToScale";
 import { Anomalies } from "@/components/Anomalies";
 import { BulkBar, useBulkAction } from "@/components/BulkBar";
 import { TrendChart } from "@/components/TrendChart";
@@ -19,6 +21,12 @@ export default function OverviewPage() {
   const bulk = useBulkAction(bump);
 
   const overview = useData(["overview", params, revision], () => api.overview(params));
+  // Kilka rzeczy na dzis - inaczej pulpit mowi "jak bylo", a nie "co robic".
+  const dzisiaj = useData(["today", params, revision], () =>
+    api.today({ ...params, limit: 5 }),
+  );
+  // Odwrotnosc sugestii: gdzie NIE doplacamy.
+  const skala = useData(["scale", params, revision], () => api.scale(params));
   // Miesiace nie zaleza od wybranego zakresu dat - to osobne spojrzenie,
   // z wlasnym oknem. Stad brak params w kluczu.
   // Stan konta idzie osobnym zapytaniem: liczy sugestie, wiec trwa dluzej niz
@@ -98,6 +106,12 @@ export default function OverviewPage() {
   return (
     <div className="space-y-4">
       <HomeStatus status={status.data} currency={currency} />
+
+      {/* Zaraz pod stanem danych, PRZED wykresami - bo to jedyna sekcja,
+          ktora mowi, co zrobic, a nie jak bylo. */}
+      <Today data={dzisiaj.data} loading={dzisiaj.loading} currency={currency} />
+
+      <WhereToScale data={skala.data} loading={skala.loading} currency={currency} />
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4 2xl:grid-cols-8">
         {overview.loading && !totals ? (

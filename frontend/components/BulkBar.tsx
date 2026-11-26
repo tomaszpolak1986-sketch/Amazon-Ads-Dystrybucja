@@ -121,14 +121,20 @@ export function BulkBar({
             <div className="flex items-start gap-2 rounded-lg bg-warn-soft px-3 py-2">
               <ShieldCheck className="mt-0.5 size-4 shrink-0 text-warn" />
               <div className="min-w-0 text-xs">
-                <div className="font-medium text-warn">Wymaga Twojego zatwierdzenia</div>
+                <div className="font-medium text-warn">
+                  {pending.plan_id ? "Wymaga Twojego zatwierdzenia" : "Nie ma czego zatwierdzać"}
+                </div>
+                {/* Dawny tekst obiecywal, ze "plan wygasa o 15:30". Obie polowy
+                    tego zdania byly nieprawdziwe. Po pierwsze nic nie wygasa -
+                    plan czeka w kolejce az go zatwierdzisz albo odrzucisz,
+                    `expires_at` jest zapisywane i przez nikogo nieuzywane.
+                    Po drugie, gdy nie bylo czego policzyc, plan w ogole nie
+                    powstawal, a `expires_at` bylo puste - i w pasku stalo
+                    "wygasa o Invalid Date". */}
                 <div className="mt-0.5 text-muted">
-                  Nic nie zostało jeszcze wysłane do Amazona. Plan wygasa o{" "}
-                  {new Date(pending.expires_at).toLocaleTimeString("pl-PL", {
-                    hour: "2-digit",
-                    minute: "2-digit",
-                  })}
-                  .
+                  {pending.plan_id
+                    ? "Nic nie zostało jeszcze wysłane do Amazona. Plan czeka w kolejce, dopóki go nie zatwierdzisz albo nie odrzucisz."
+                    : "Nic nie zostało wysłane i nic nie czeka w kolejce - żadna z pozycji nie nadaje się do wykonania."}
                 </div>
               </div>
             </div>

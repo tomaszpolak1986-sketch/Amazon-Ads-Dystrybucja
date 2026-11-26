@@ -45,7 +45,8 @@ _SCIEZKI = (
     "/api/overview", "/api/markets", "/api/portfolios", "/api/campaigns",
     "/api/ad-groups", "/api/targets", "/api/search-terms", "/api/placements",
     "/api/product-ads", "/api/products", "/api/negatives/", "/api/suggestions",
-    "/api/opportunities/", "/api/home/status", "/api/monthly", "/api/ngrams",
+    "/api/opportunities/", "/api/home/status", "/api/home/today", "/api/monthly",
+    "/api/ngrams",
     "/api/anomalies", "/api/effectiveness",
 )
 _POMIJANE = ("/api/suggestions/dismissed",)
@@ -335,6 +336,8 @@ def adresy_ekranow(rynki: list[int], start: str, end: str) -> list[str]:
             # Sugestie i strona glowna najpierw - najciezsze i najczesciej otwierane
             u("/api/suggestions", **z, limit=1000, sensitivity=1),
             u("/api/home/status", **z),
+            u("/api/home/today", **z, limit=5),
+            u("/api/opportunities/scale", **z),
             u("/api/overview", **z),
             u("/api/monthly", profile_id=pid, months=6),
             u("/api/anomalies", profile_id=pid),
@@ -353,6 +356,7 @@ def adresy_ekranow(rynki: list[int], start: str, end: str) -> list[str]:
             u("/api/opportunities/overlap", **z, min_clicks=10, limit=300),
             u("/api/opportunities/sku-overlap", **z, min_clicks=10, limit=300),
             u("/api/ngrams", **z, limit=300),
+            u("/api/opportunities/global-negatives", **z),
             u("/api/opportunities/budget-capped", **z),
         ]
     return out

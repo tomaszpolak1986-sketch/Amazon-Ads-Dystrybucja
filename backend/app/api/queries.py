@@ -2277,6 +2277,172 @@ def negative_candidates(
     return [_derive(dict(r)) for r in session.execute(stmt).mappings().all()]
 
 
+def gdzie_dolozyc(
+    session: Session, profile_id: int | None, start: dt.date, end: dt.date,
+) -> dict[str, Any]:
+    """Rynki i typy reklam, ktore zarabiaja lepiej niz srednia, a dostaja grosze.
+
+    Panel umial dotad tylko hamowac: kazda sugestia pytala "gdzie przeplacam".
+    Pytania "gdzie nie doplacam" nie zadawal nikt, a odpowiedz na nie jest na
+    tym koncie warta wiecej - BE i NL maja ACOS kilkukrotnie lepszy od DE
+    i dostaja razem mniej niz procent budzetu.
+
+    To jest WSKAZANIE, nie gotowa zmiana, i tak ma zostac. Dolozenie pieniedzy
+    rynkowi nie jest jedna operacja: w kampanii dobijajacej budzet trzeba
+    podniesc budzet, a w takiej, ktora go nie wyczerpuje, stawki - panel nie
+    zgadnie, ktora droga jest wlasciwa dla dwudziestu kampanii naraz.
+    """
+    def zbierz(grupa_kolumna, etykieta_kolumna, model=CampaignDaily):
+        kurs = kurs_dnia(model, profile_id)
+        stmt = select(etykieta_kolumna.label("label"), *_sums(model, kurs)).select_from(model)
+        if profile_id and grupa_kolumna.table is Profile.__table__:
+            # Przy jednym rynku `_fx_join` nie dolacza profilu (kurs zbedny),
+            # a bez tego zlaczenia grupowanie po kraju mnozylo wyniki przez
+            # liczbe profili: 13 "rynkow" z liczbami samego DE.
+            stmt = stmt.join(Profile, Profile.profile_id == model.profile_id)
+        stmt = (
+            _fx_join(stmt, model, profile_id)
+            .where(_window(model, profile_id, start, end))
+            .group_by(grupa_kolumna)
+        )
+        return [_derive(dict(r)) for r in session.execute(stmt).mappings().all()]
+
+    rynki = zbierz(Profile.country_code, Profile.country_code)
+    typy = zbierz(CampaignDaily.ad_product, CampaignDaily.ad_product)
+
+    koszt_calk = sum(r.get("cost") or 0 for r in rynki)
+    sprzedaz_calk = sum(r.get("sales") or 0 for r in rynki)
+    ref = (koszt_calk / sprzedaz_calk * 100) if sprzedaz_calk else None
+
+    def opisz(wiersze: list[dict[str, Any]], rodzaj: str) -> list[dict[str, Any]]:
+        out = []
+        for r in wiersze:
+            koszt = r.get("cost") or 0
+            acos = r.get("acos")
+            udzial = (koszt / koszt_calk * 100) if koszt_calk else 0
+            # "Warte dolozenia" wymaga OBU warunkow naraz: wyraznie lepszego
+            # zwrotu i malego udzialu w wydatku. Sam dobry ACOS przy duzym
+            # budzecie nie jest okazja - to po prostu glowny kanal.
+            warte = (
+                acos is not None and ref is not None
+                and acos < ref * 0.75 and udzial < 10 and koszt > 0
+            )
+            out.append({
+                **r,
+                "kind": rodzaj,
+                "name": r.get("label"),
+                "share_of_cost": round(udzial, 2),
+                "acos_ref": round(ref, 2) if ref is not None else None,
+                "worth_scaling": warte,
+            })
+        out.sort(key=lambda x: (not x["worth_scaling"], x.get("acos") or 999))
+        return out
+
+    return {
+        "acos_ref": round(ref, 2) if ref is not None else None,
+        "markets": opisz(rynki, "market"),
+        "ad_products": opisz(typy, "ad_product"),
+    }
+
+
+def wykluczenia_globalne(
+    session: Session, profile_id: int | None, start: dt.date, end: dt.date,
+    min_kampanii: int = 2, min_koszt: float = 1.0, limit: int = 300,
+) -> list[dict[str, Any]]:
+    """Frazy, ktore pala pieniadze w KILKU kampaniach naraz i nigdzie nie sprzedaja.
+
+    Panel proponowal dotad wykluczenie osobno dla kazdej pary kampania+grupa.
+    Przy frazie palacej sie w pieciu miejscach trzeba bylo zatwierdzic to piec
+    razy, a takich fraz jest na tym koncie blisko trzy tysiace - czyli praca
+    nie do wykonania recznie. Tutaj fraza jest JEDNYM wierszem, z lista miejsc,
+    w ktorych wystepuje.
+
+    Warunek jest ostrzejszy niz przy zwyklych kandydatach na wykluczenie:
+    zero zamowien I zero sprzedazy, w tym sprzedazy innych produktow (halo).
+    Fraza, ktora sprzedaje cokolwiek gdziekolwiek, nie trafia tu w ogole -
+    wykluczenie globalne jest nieodwracalne jednym ruchem we wszystkich
+    kampaniach, wiec prog musi byc wyzszy niz przy decyzji punktowej.
+    """
+    laczna = (
+        select(
+            SearchTermDaily.search_term.label("term"),
+            func.count(func.distinct(SearchTermDaily.campaign_id)).label("kampanii"),
+            func.sum(SearchTermDaily.cost).label("cost"),
+            func.sum(SearchTermDaily.clicks).label("clicks"),
+            func.sum(SearchTermDaily.orders).label("orders"),
+            func.sum(SearchTermDaily.sales).label("sales"),
+            func.sum(func.coalesce(SearchTermDaily.sales_other_sku, 0)).label("halo"),
+        )
+        .where(_window(SearchTermDaily, profile_id, start, end))
+        .group_by(SearchTermDaily.search_term)
+        .having(
+            and_(
+                func.count(func.distinct(SearchTermDaily.campaign_id)) >= min_kampanii,
+                func.sum(SearchTermDaily.orders) == 0,
+                func.sum(SearchTermDaily.sales) == 0,
+                func.sum(func.coalesce(SearchTermDaily.sales_other_sku, 0)) == 0,
+                func.sum(SearchTermDaily.cost) >= min_koszt,
+            )
+        )
+        .order_by(func.sum(SearchTermDaily.cost).desc())
+        .limit(limit)
+    ).subquery()
+
+    frazy = {
+        str(r["term"]): dict(r)
+        for r in session.execute(select(laczna)).mappings().all()
+    }
+    if not frazy:
+        return []
+
+    # Miejsca wystepowania - potrzebne, bo wykluczenie zaklada sie na poziomie
+    # grupy reklam, a nie konta. "Globalne" znaczy tu "we wszystkich miejscach
+    # naraz, jednym zatwierdzeniem", nie "jednym wpisem u Amazona".
+    miejsca = session.execute(
+        select(
+            SearchTermDaily.search_term,
+            SearchTermDaily.campaign_id,
+            SearchTermDaily.ad_group_id,
+            Campaign.name.label("campaign_name"),
+            func.sum(SearchTermDaily.cost).label("cost"),
+        )
+        .join(Campaign, Campaign.campaign_id == SearchTermDaily.campaign_id, isouter=True)
+        .where(
+            _window(SearchTermDaily, profile_id, start, end),
+            SearchTermDaily.search_term.in_(list(frazy)),
+        )
+        .group_by(
+            SearchTermDaily.search_term, SearchTermDaily.campaign_id,
+            SearchTermDaily.ad_group_id, Campaign.name,
+        )
+    ).mappings().all()
+
+    for m in miejsca:
+        wpis = frazy.get(str(m["search_term"]))
+        if wpis is None:
+            continue
+        wpis.setdefault("places", []).append({
+            "campaign_id": str(m["campaign_id"]),
+            "ad_group_id": str(m["ad_group_id"]),
+            "campaign_name": m["campaign_name"],
+            "cost": round(float(m["cost"] or 0), 2),
+        })
+
+    out = []
+    for term, wpis in frazy.items():
+        miejsca_frazy = wpis.get("places") or []
+        out.append({
+            "search_term": term,
+            "campaigns": int(wpis.get("kampanii") or 0),
+            "places": sorted(miejsca_frazy, key=lambda x: -x["cost"]),
+            "place_count": len(miejsca_frazy),
+            "cost": round(float(wpis.get("cost") or 0), 2),
+            "clicks": int(wpis.get("clicks") or 0),
+        })
+    out.sort(key=lambda x: -x["cost"])
+    return out
+
+
 def harvest_candidates(
     session: Session, profile_id: int | None, start: dt.date, end: dt.date,
     min_orders: int = 2, max_acos: float = 35.0, limit: int = 500,
@@ -3325,6 +3491,15 @@ def pending_plans_summary(
     conds = [PendingPlan.status == "PENDING"]
     if profile_id:
         conds.append(PendingPlan.profile_id == profile_id)
+    # Szkice z paska podgladu nie licza sie do kolejki - patrz `_create_plan`.
+    # Bez tego licznik przy "Do zatwierdzenia" rosl po kazdym dotknieciu
+    # rozwijanej listy, nawet gdy nic nie zostalo wyslane.
+    conds.append(
+        or_(
+            PendingPlan.payload["draft"].as_boolean().is_(False),
+            PendingPlan.payload["draft"].is_(None),
+        )
+    )
 
     rows = session.execute(
         select(PendingPlan.kind, func.count(), func.sum(PendingPlan.item_count))

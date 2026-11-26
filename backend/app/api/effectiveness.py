@@ -330,5 +330,24 @@ def analyze(
             "flat": sum(1 for g in gotowe if g["verdict"] == "bez zmiany"),
             "waiting": len(czekaja),
             "noise_band": PASMO_SZUMU,
+            # PIENIADZE TU NIE STOJA i to jest decyzja, nie brak pomyslu.
+            #
+            # Probowalem dopisac "wydatek/30 dni" i "sprzedaz/30 dni" jako sume
+            # roznic z poszczegolnych zmian. Wyszla liczba, ktora wygladala
+            # wiarygodnie i byla nieprawdziwa z dwoch niezaleznych powodow:
+            #
+            # 1. `delta` to ZMIANA PROCENTOWA, nie kwota (patrz funkcja nizej:
+            #    (po - przed) / |przed| * 100). Sumowanie procentow i mnozenie
+            #    przez 30 daje liczbe bez jednostki, podpisana w euro. Jedna
+            #    kampania "zmieniala" tak dzienny wydatek o 566 EUR, podczas
+            #    gdy cale konto wydaje 499 EUR dziennie.
+            # 2. Nawet na kwotach bezwzglednych suma mieszalaby poziomy:
+            #    wydatek keyworda zawiera sie w wydatku jego kampanii, wiec
+            #    zmiany z obu poziomow policzylyby te same pieniadze dwa razy.
+            #
+            # Zeby podac tu kwote, trzeba liczyc na jednym poziomie encji
+            # i z wartosci bezwzglednych (`before`/`after` je maja). Do czasu,
+            # az to powstanie, lepiej nie pokazywac nic niz liczbe, ktorej
+            # nikt nie zweryfikuje.
         },
     }

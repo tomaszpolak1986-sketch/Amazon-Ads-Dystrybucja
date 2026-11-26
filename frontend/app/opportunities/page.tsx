@@ -5,6 +5,7 @@ import { Lightbulb } from "lucide-react";
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import { BudgetCapped } from "@/components/BudgetCapped";
+import { GlobalNegatives } from "@/components/GlobalNegatives";
 import { BulkBar, useBulkAction } from "@/components/BulkBar";
 import { DataTable } from "@/components/DataTable";
 import { NgramBreakdown } from "@/components/NgramBreakdown";
@@ -82,6 +83,10 @@ export default function OpportunitiesPage() {
   );
   const ngrams = useData(["ngrams", params, revision], () =>
     api.ngrams({ ...params, limit: 300 }),
+  );
+  // Frazy palace sie w kilku kampaniach naraz - jedna decyzja zamiast pieciu.
+  const globalne = useData(["global-negatives", params, revision], () =>
+    api.globalNegatives(params),
   );
   const budget = useData(["budget-capped", params, revision], () =>
     api.budgetCapped(params),
@@ -194,6 +199,19 @@ export default function OpportunitiesPage() {
           </p>
         </div>
       </div>
+
+      {/* Nad zakladkami, bo to najwieksza pojedyncza kwota na tym ekranie
+          i jedyna pozycja, ktora zalatwia sie jednym zaznaczeniem zamiast
+          powtarzania tej samej decyzji w kilku kampaniach. */}
+      <GlobalNegatives
+        data={globalne.data}
+        loading={globalne.loading}
+        currency={currency}
+        canPlan={profileId !== null && !bulk.busy}
+        onExclude={(items) =>
+          bulk.preview(() => api.planNegatives(profileId!, items, "AD_GROUP"))
+        }
+      />
 
       <Card
         title={

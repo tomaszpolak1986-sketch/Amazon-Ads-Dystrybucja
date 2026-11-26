@@ -1551,9 +1551,26 @@ def get_today(
     """
     rows = queries.all_suggestions(session, profile_id, rng.start, rng.end, True, 900)
     gorne = rows[:limit]
+
+    # Przy "Wszystkie" pozycje sa w walutach swoich rynkow (GBP, SEK, PLN...),
+    # a suma jest podpisana w EUR - trzeba ja przeliczyc, inaczej korony
+    # wchodzily do niej jako euro. Ostatni znany kurs wystarczy: to suma
+    # orientacyjna, nie raport. Przy jednym rynku wszystko jest w jego walucie.
+    kursy: dict[str, float] = {}
+    if profile_id is None:
+        from .models import FxRate
+
+        for waluta in {r.get("currency") for r in rows} - {None, "EUR"}:
+            kurs = session.execute(
+                select(FxRate.rate_eur).where(FxRate.currency == waluta)
+                .order_by(desc(FxRate.date)).limit(1)
+            ).scalar()
+            if kurs:
+                kursy[waluta] = float(kurs)
+    suma = sum((r.get("impact") or 0) * kursy.get(r.get("currency"), 1.0) for r in rows)
     return {
         "total": len(rows),
-        "total_impact": round(sum(r.get("impact") or 0 for r in rows), 2),
+        "total_impact": round(suma, 2),
         "items": gorne,
     }
 

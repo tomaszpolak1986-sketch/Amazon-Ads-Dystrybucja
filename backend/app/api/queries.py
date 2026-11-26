@@ -2363,15 +2363,23 @@ def wykluczenia_globalne(
     wykluczenie globalne jest nieodwracalne jednym ruchem we wszystkich
     kampaniach, wiec prog musi byc wyzszy niz przy decyzji punktowej.
     """
+    # Przy "Wszystkie" kwoty z roznych rynkow trzeba sprowadzic do jednej
+    # waluty - inaczej korony szwedzkie szly do sumy jako euro (fraza za
+    # 667 SEK pokazywala sie jako 667 EUR na szczycie listy).
+    kurs = kurs_dnia(SearchTermDaily, profile_id)
+    koszt = func.sum(SearchTermDaily.cost * kurs)
     laczna = (
-        select(
-            SearchTermDaily.search_term.label("term"),
-            func.count(func.distinct(SearchTermDaily.campaign_id)).label("kampanii"),
-            func.sum(SearchTermDaily.cost).label("cost"),
-            func.sum(SearchTermDaily.clicks).label("clicks"),
-            func.sum(SearchTermDaily.orders).label("orders"),
-            func.sum(SearchTermDaily.sales).label("sales"),
-            func.sum(func.coalesce(SearchTermDaily.sales_other_sku, 0)).label("halo"),
+        _fx_join(
+            select(
+                SearchTermDaily.search_term.label("term"),
+                func.count(func.distinct(SearchTermDaily.campaign_id)).label("kampanii"),
+                koszt.label("cost"),
+                func.sum(SearchTermDaily.clicks).label("clicks"),
+                func.sum(SearchTermDaily.orders).label("orders"),
+                func.sum(SearchTermDaily.sales).label("sales"),
+                func.sum(func.coalesce(SearchTermDaily.sales_other_sku, 0)).label("halo"),
+            ).select_from(SearchTermDaily),
+            SearchTermDaily, profile_id,
         )
         .where(_window(SearchTermDaily, profile_id, start, end))
         .group_by(SearchTermDaily.search_term)
@@ -2381,10 +2389,10 @@ def wykluczenia_globalne(
                 func.sum(SearchTermDaily.orders) == 0,
                 func.sum(SearchTermDaily.sales) == 0,
                 func.sum(func.coalesce(SearchTermDaily.sales_other_sku, 0)) == 0,
-                func.sum(SearchTermDaily.cost) >= min_koszt,
+                koszt >= min_koszt,
             )
         )
-        .order_by(func.sum(SearchTermDaily.cost).desc())
+        .order_by(koszt.desc())
         .limit(limit)
     ).subquery()
 
@@ -2399,12 +2407,15 @@ def wykluczenia_globalne(
     # grupy reklam, a nie konta. "Globalne" znaczy tu "we wszystkich miejscach
     # naraz, jednym zatwierdzeniem", nie "jednym wpisem u Amazona".
     miejsca = session.execute(
-        select(
-            SearchTermDaily.search_term,
-            SearchTermDaily.campaign_id,
-            SearchTermDaily.ad_group_id,
-            Campaign.name.label("campaign_name"),
-            func.sum(SearchTermDaily.cost).label("cost"),
+        _fx_join(
+            select(
+                SearchTermDaily.search_term,
+                SearchTermDaily.campaign_id,
+                SearchTermDaily.ad_group_id,
+                Campaign.name.label("campaign_name"),
+                func.sum(SearchTermDaily.cost * kurs).label("cost"),
+            ).select_from(SearchTermDaily),
+            SearchTermDaily, profile_id,
         )
         .join(Campaign, Campaign.campaign_id == SearchTermDaily.campaign_id, isouter=True)
         .where(

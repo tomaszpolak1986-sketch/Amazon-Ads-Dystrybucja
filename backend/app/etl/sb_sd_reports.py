@@ -123,7 +123,23 @@ def _rows_search_term(pid: int, ad_product: str, raw: list[dict[str, Any]]):
     )
 
 
+def _pusty(w: dict[str, Any]) -> bool:
+    return not any(w.get(k) for k in (
+        "impressions", "clicks", "cost", "orders", "sales", "units",
+        "sales_other_sku", "units_other_sku",
+    ))
+
+
 def _rows_product(pid: int, ad_product: str, raw: list[dict[str, Any]]):
+    # Raport produktow SD zwraca kazdy reklamowany produkt za kazdy dzien,
+    # takze bez jednego wyswietlenia - 78% wierszy to same zera (27.11.2026:
+    # 585 tys. z 752 tys.). Suma zer to to samo co brak wiersza, a tabela
+    # produktow jest najwieksza w bazie. SP tego nie dotyczy: jego wiersze
+    # trzymaja dzien w wykrywaniu luk (patrz `luki_w_danych`).
+    return [w for w in _rows_product_wszystkie(pid, ad_product, raw) if not _pusty(w)]
+
+
+def _rows_product_wszystkie(pid: int, ad_product: str, raw: list[dict[str, Any]]):
     return _dedupe(
         [
             {

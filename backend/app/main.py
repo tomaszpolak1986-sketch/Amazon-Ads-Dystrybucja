@@ -23,7 +23,7 @@ from ._wydanie import WERSJA, WYMAGA_LICENCJI
 from .api import actions, anomalies, effectiveness, konto_amazon, queries
 from .config import settings
 from . import pamiec_odpowiedzi
-from .db import get_session, indeksy_wydajnosci, init_db
+from .db import get_session, indeksy_wydajnosci, init_db, sprzatanie_jednorazowe
 from .etl import sync, sync_lock
 from .rules import engine as rules_engine
 from .etl import business_report, total_sales
@@ -74,7 +74,26 @@ def _scheduled_sb_sd_refresh() -> None:
     _sb_sd_refresh_body()
 
 
+_SB_SD_TRWA = threading.Lock()
+
+
 def _sb_sd_refresh_body() -> None:
+    """Jeden przebieg SB/SD naraz - patrz `_sb_sd_refresh_body_wewn`.
+
+    Nocne zadanie (4:00) i nadrabianie po starcie wolaja to samo. Przebieg
+    trwa godzinami, a blokada pobierania jest zwalniana miedzy rynkami, wiec
+    drugi przebieg wchodzil w luki i pobieral te same raporty rownolegle.
+    """
+    if not _SB_SD_TRWA.acquire(blocking=False):
+        log.info("SB/SD: przebieg juz trwa - pomijam drugi")
+        return
+    try:
+        _sb_sd_refresh_body_wewn()
+    finally:
+        _SB_SD_TRWA.release()
+
+
+def _sb_sd_refresh_body_wewn() -> None:
     """Dobowe pobranie raportow Sponsored Brands i Sponsored Display.
 
     Osobne zadanie, bo te raporty rzadza sie inaczej niz SP: generuja sie
@@ -191,7 +210,10 @@ def _odswiez_kursy() -> None:
         log.exception("Odswiezanie kursow walut nie powiodlo sie")
 
 
-def _scheduled_data_refresh(od: dt.date | None = None) -> None:
+def _scheduled_data_refresh(
+    od: dt.date | None = None, reklamy: bool = True, sprzedaz: bool = True,
+    od_sprzedazy: dt.date | None = None,
+) -> None:
     """Cykliczne dociaganie swiezych danych - jeden przebieg naraz.
 
     `od` przesuwa poczatek okna wstecz - uzywa tego nadrabianie, gdy znajdzie
@@ -203,12 +225,16 @@ def _scheduled_data_refresh(od: dt.date | None = None) -> None:
     """
     try:
         with sync_lock.przebieg("odswiezanie planowe"):
-            _data_refresh_body(od)
+            _data_refresh_body(od, reklamy=reklamy, sprzedaz=sprzedaz,
+                               od_sprzedazy=od_sprzedazy)
     except sync_lock.Zajete as exc:
         log.info("Odswiezanie pominiete: %s", exc)
 
 
-def _data_refresh_body(od: dt.date | None = None) -> None:
+def _data_refresh_body(
+    od: dt.date | None = None, reklamy: bool = True, sprzedaz: bool = True,
+    od_sprzedazy: dt.date | None = None,
+) -> None:
     """Cykliczne dociaganie swiezych danych.
 
     To wylacznie ODCZYT - pobranie raportow niczego w Amazonie nie zmienia,
@@ -265,11 +291,19 @@ def _data_refresh_body(od: dt.date | None = None) -> None:
             log.exception("Pierwsze pobranie %s nie powiodlo sie", kod)
 
     end = dt.date.today() - dt.timedelta(days=1)
-    start = end - dt.timedelta(days=settings.auto_refresh_days - 1)
-    if od and od < start:
+    zwykly_start = end - dt.timedelta(days=settings.auto_refresh_days - 1)
+
+    def okno(od_luki: dt.date | None) -> dt.date:
         # Luka starsza niz zwykle okno - siegamy po nia, ale nie dalej niz
         # retencja raportow Amazona (frazy znikaja po ~65 dniach).
-        start = max(od, end - dt.timedelta(days=60))
+        if od_luki and od_luki < zwykly_start:
+            return max(od_luki, end - dt.timedelta(days=60))
+        return zwykly_start
+
+    start = okno(od)
+    # Sprzedaz ma wlasna luke - wczesniej dzielila okno z reklamami, wiec
+    # dziura w podziale FBA ciagnela za soba miesiac raportow reklamowych.
+    start_sprzedazy = okno(od_sprzedazy if od_sprzedazy is not None else od)
 
     try:
         with session_scope() as session:
@@ -289,8 +323,9 @@ def _data_refresh_body(od: dt.date | None = None) -> None:
         log.exception("Odswiezanie: nie udalo sie ustalic listy rynkow")
         return
 
-    log.info("Odswiezanie danych: %s rynkow, %s..%s",
-             len(rynki), start, end)
+    log.info("Odswiezanie danych: %s rynkow, reklamy %s, sprzedaz %s",
+             len(rynki), f"{start}..{end}" if reklamy else "pominiete (aktualne)",
+             f"{start_sprzedazy}..{end}" if sprzedaz else "pominieta (aktualna)")
 
     # Czas idzie na czekanie, az Amazon wygeneruje raport (~20 min), wiec dwa
     # rynki naraz skracaja przebieg o polowe, nie obciazajac nas dwukrotnie.
@@ -305,14 +340,15 @@ def _data_refresh_body(od: dt.date | None = None) -> None:
         except Exception:
             log.exception("Odswiezanie %s nie powiodlo sie", kod)
 
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        list(pool.map(lambda a: jeden(*a), rynki))
+    if reklamy:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            list(pool.map(lambda a: jeden(*a), rynki))
 
     # Sprzedaz calkowita tylko wtedy, gdy SP-API jest skonfigurowane
-    if settings.sp_configured:
+    if sprzedaz and settings.sp_configured:
         try:
             from .etl import sales_sync
-            sales_sync.sync_all(start, end)
+            sales_sync.sync_all(start_sprzedazy, end)
         except Exception:
             log.exception("Odswiezanie sprzedazy calkowitej nie powiodlo sie")
 
@@ -321,7 +357,7 @@ def _data_refresh_body(od: dt.date | None = None) -> None:
         # tyle co jedno zapytanie, a nie dziesiec.
         try:
             from .etl import orders_sync
-            orders_sync.sync_window(start, end)
+            orders_sync.sync_window(start_sprzedazy, end)
         except Exception:
             log.exception("Odswiezanie podzialu FBA nie powiodlo sie")
 
@@ -427,12 +463,21 @@ def _startup_catchup() -> None:
     # Okno pobrania siega najstarszej luki, nie tylko ostatnich kilku dni -
     # inaczej dziura w srodku zostaje tam na zawsze. Raport Amazona kosztuje
     # tyle samo zapytan niezaleznie od dlugosci okna, wiec poszerzenie go nie
-    # obciaza limitu; rosnie tylko czas generowania.
-    od_luki = min(
-        [d for d in (luki_reklam["from"], luki_sprzedazy["from"]) if d],
-        default=None,
-    )
-    _scheduled_data_refresh(od=od_luki)
+    # obciaza limitu; rosnie tylko czas generowania. Reklamy i sprzedaz maja
+    # kazda wlasne okno (od swojej luki).
+    # Tylko to, co zalega. Raport sprzedazy za wczoraj Amazon wystawia kolo
+    # poludnia, a sprawdzenie idzie co godzine - wczesniej kazde z nich
+    # pobieralo od nowa takze aktualne juz raporty reklam (9 rynkow po 5
+    # raportow), kilkanascie razy dziennie.
+    reklamy_zalegaja = brak_reklam or bool(luki_reklam["from"])
+    sprzedaz_zalega = brak_sprzedazy or brak_fba or bool(luki_sprzedazy["from"])
+    if reklamy_zalegaja or sprzedaz_zalega:
+        _scheduled_data_refresh(
+            od=luki_reklam["from"], reklamy=reklamy_zalegaja,
+            sprzedaz=sprzedaz_zalega,
+            # Bez luki w sprzedazy - zwykle okno, nie okno luki reklam
+            od_sprzedazy=luki_sprzedazy["from"] or dt.date.max,
+        )
 
     if brak_sb_sd:
         # Bez wlasnej blokady - `_sb_sd_refresh_body` bierze ja per rynek.
@@ -475,6 +520,7 @@ async def lifespan(_: FastAPI):
     # Indeksy w osobnym watku - start nie czeka (patrz `indeksy_wydajnosci`)
     def _po_starcie() -> None:
         indeksy_wydajnosci()
+        sprzatanie_jednorazowe()
         pamiec_odpowiedzi.rozgrzej_w_tle()
 
     threading.Thread(target=_po_starcie, name="po-starcie", daemon=True).start()

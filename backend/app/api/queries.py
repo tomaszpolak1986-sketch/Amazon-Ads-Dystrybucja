@@ -3426,6 +3426,9 @@ def luki_w_danych(
     wczoraj = dt.date.today() - dt.timedelta(days=1)
     od = wczoraj - dt.timedelta(days=dni - 1)
 
+    if model is FulfillmentDaily:
+        return _luki_fba(session, profile_id, od, wczoraj)
+
     # Dla kazdej pary (dzien, rynek) pytamy tylko, czy JEST choc jeden wiersz.
     # Indeks unikalny zaczyna sie od (date, profile_id), wiec to kilkaset
     # trafien w indeks. Liczenie `count(distinct)` czytalo za kazdym razem
@@ -3475,6 +3478,66 @@ def luki_w_danych(
             brakujace.append(dzien)
         elif ile < prog:
             czesciowe.append(dzien)
+        dzien += dt.timedelta(days=1)
+
+    wszystkie = sorted(brakujace + czesciowe)
+    return {
+        "missing": brakujace,
+        "partial": czesciowe,
+        "from": wszystkie[0] if wszystkie else None,
+    }
+
+
+def _luki_fba(
+    session: Session, profile_id: int | None, od: dt.date, wczoraj: dt.date,
+) -> dict[str, Any]:
+    """Luki w podziale FBA/FBM - mierzone wzgledem dni, w ktorych BYLY zamowienia.
+
+    Raport zamowien nie ma wiersza za dzien bez sprzedazy. Ogolny prog ("dzien
+    ma 70% rynkow najlepszego dnia") bral wiec ciche dni malych rynkow (NL, PL,
+    SE: kilkanascie dni na trzydziesci) za dziure nie do zasypania - i kazde
+    nadrabianie co godzine pobieralo od nowa ten sam miesiac WSZYSTKICH
+    raportow, bo okno siega najstarszej luki (27.11.2026: od 30.10).
+
+    Oczekiwane rynki dnia = te, ktore w ogole przysylaja dane FBA i maja tego
+    dnia zamowienia w raporcie sprzedazy. Ten sam luz progu co gdzie indziej -
+    raporty licza dzien w roznych strefach, wiec pojedyncze zamowienie bywa
+    przypisane sasiedniemu dniowi.
+    """
+    warunki = [FulfillmentDaily.date >= od, FulfillmentDaily.date <= wczoraj]
+    if profile_id:
+        warunki.append(FulfillmentDaily.profile_id == profile_id)
+    obecne: dict[dt.date, set[int]] = {}
+    for d, pid in session.execute(
+        select(FulfillmentDaily.date, FulfillmentDaily.profile_id).where(*warunki).distinct()
+    ).all():
+        obecne.setdefault(d, set()).add(pid)
+    if not obecne:
+        return {"missing": [], "partial": [], "from": None}
+    uczestnicy = set().union(*obecne.values())
+
+    zamowienia: dict[dt.date, set[int]] = {}
+    for d, pid in session.execute(
+        select(TotalSalesDaily.date, TotalSalesDaily.profile_id)
+        .where(
+            TotalSalesDaily.date >= od, TotalSalesDaily.date <= wczoraj,
+            TotalSalesDaily.profile_id.in_(list(uczestnicy)),
+        )
+        .group_by(TotalSalesDaily.date, TotalSalesDaily.profile_id)
+        .having(func.sum(TotalSalesDaily.orders) > 0)
+    ).all():
+        zamowienia.setdefault(d, set()).add(pid)
+
+    brakujace, czesciowe = [], []
+    dzien = min(obecne)
+    while dzien <= wczoraj:
+        oczekiwane = zamowienia.get(dzien, set())
+        jest = obecne.get(dzien, set())
+        if oczekiwane:
+            if not jest:
+                brakujace.append(dzien)
+            elif len(oczekiwane & jest) < round(len(oczekiwane) * PROG_PELNEGO_DNIA):
+                czesciowe.append(dzien)
         dzien += dt.timedelta(days=1)
 
     wszystkie = sorted(brakujace + czesciowe)

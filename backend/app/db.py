@@ -4,7 +4,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from contextlib import contextmanager
 
-from sqlalchemy import create_engine, event
+from sqlalchemy import create_engine, event, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from .config import settings
@@ -92,6 +92,37 @@ _TABELE_FAKTOW = (
     "metrics_campaign_daily", "metrics_placement_daily", "metrics_target_daily",
     "metrics_search_term_daily", "metrics_product_daily", "total_sales_daily",
 )
+
+
+def sprzatanie_jednorazowe() -> None:
+    """Jednorazowe porzadki w danych - kazdy krok raz, ze znacznikiem w data/.
+
+    * puste wiersze produktow SB/SD (same zera) - od wersji 1.7.2 nie sa
+      zapisywane, a do tej pory stanowily 78% wierszy SD w najwiekszej
+      tabeli bazy. Suma zer to to samo co brak wiersza, wiec wyniki sie nie
+      zmieniaja.
+    """
+    import logging
+
+    from .config import PROJECT_ROOT
+
+    log = logging.getLogger(__name__)
+    znacznik = PROJECT_ROOT / "data" / "sprzatanie-puste-sd.ok"
+    if engine.dialect.name != "postgresql" or znacznik.exists():
+        return
+    try:
+        with engine.begin() as conn:
+            ile = conn.execute(text(
+                "DELETE FROM metrics_product_daily WHERE ad_product IN ('SB', 'SD') "
+                "AND impressions = 0 AND clicks = 0 AND cost = 0 AND orders = 0 "
+                "AND sales = 0 AND units = 0 AND coalesce(sales_other_sku, 0) = 0 "
+                "AND coalesce(units_other_sku, 0) = 0"
+            )).rowcount
+        log.info("Sprzatanie: usunieto %s pustych wierszy produktow SB/SD", ile)
+        znacznik.parent.mkdir(parents=True, exist_ok=True)
+        znacznik.write_text("ok", encoding="utf-8")
+    except Exception:  # noqa: BLE001 - sprobuje przy nastepnym starcie
+        log.warning("Sprzatanie pustych wierszy SB/SD nie powiodlo sie", exc_info=True)
 
 
 def indeksy_wydajnosci() -> None:

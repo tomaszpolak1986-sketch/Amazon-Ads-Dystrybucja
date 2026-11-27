@@ -1705,9 +1705,23 @@ def all_suggestions(
                 pid_portfela, nazwa_portfela = portfele.get(cid, (0, "Bez portfolio"))
                 if portfolio_id is not None and pid_portfela != portfolio_id:
                     continue
+                # Identyfikator MUSI byc jednoznaczny - po nim przegladarka
+                # zaznacza wiersz, a odrzucenie chowa sugestie. Placement
+                # ("Reszta wynikow") i fraza same z siebie nie sa: ta sama
+                # nazwa wystepuje w wielu kampaniach i grupach. 27.11.2026 u
+                # klienta zaznaczenie jednej sugestii placementu wyslalo do
+                # kolejki cztery kampanie, a odrzucenie chowalo ja wszedzie.
+                surowy = str(row.get(id_key) or "")
+                if scope == "PLACEMENT":
+                    eid = f"{row.get('campaign_id') or ''}|{surowy}"
+                elif scope == "SEARCH_TERM":
+                    eid = (f"{row.get('campaign_id') or ''}|"
+                           f"{row.get('ad_group_id') or ''}|{surowy}")
+                else:
+                    eid = surowy
                 out.append({
                     "scope": scope,
-                    "entity_id": str(row.get(id_key) or ""),
+                    "entity_id": eid,
                     "entity_name": row.get(name_key),
                     "portfolio_id": pid_portfela,
                     "portfolio_name": nazwa_portfela,
@@ -1736,6 +1750,8 @@ def all_suggestions(
                 out[-1]["impact"] = _waga_pieniezna(
                     row, sug.get("code") or "", dni_okna, prog_acos
                 )
+                if eid != surowy:
+                    out[-1]["_dawny_id"] = surowy
 
     collect(sk["kampanie"], "CAMPAIGN", "campaign_id", "name")
     collect(sk["targety"], "TARGET", "target_id", "target_text")
@@ -1772,10 +1788,16 @@ def all_suggestions(
         ]
     odrzucone = dismissed_keys(session, profile_id)
     if odrzucone:
+        # Odrzucenia zapisane przed poprawka identyfikatora maja sama nazwe
+        # placementu / fraze. Honorujemy je jak dotad (dla wszystkich miejsc),
+        # zeby po aktualizacji nic odrzuconego nie wrocilo na liste.
         out = [
             r for r in out
             if (r.get("scope"), str(r.get("entity_id")), r.get("code")) not in odrzucone
+            and (r.get("scope"), r.get("_dawny_id"), r.get("code")) not in odrzucone
         ]
+    for r in out:
+        r.pop("_dawny_id", None)
 
     out = _bez_powtorzonych_akcji(out)
     out = out[:limit]

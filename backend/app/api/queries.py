@@ -1799,6 +1799,19 @@ def all_suggestions(
     for r in out:
         r.pop("_dawny_id", None)
 
+    out = _tylko_aktywne(session, out)
+    if profile_id:
+        # Przejecie bez miejsca docelowego zostaje jako informacja z powodem -
+        # bez akcji, ktora po kliknieciu i tak nic by nie zrobila.
+        przejecia = [r for r in out if (r.get("action") or {}).get("type") == "HARVEST"]
+        for i, powod in actions_mod.przejecia_niewykonalne(
+            session, profile_id, [r["action"] for r in przejecia]
+        ).items():
+            r = przejecia[i]
+            r["action"] = None
+            r["detail"] = f"{r.get('detail') or ''} Nie da się tego teraz wykonać: {powod}.".strip()
+        if only_actionable:
+            out = [r for r in out if r.get("action")]
     out = _bez_powtorzonych_akcji(out)
     out = out[:limit]
 
@@ -1930,6 +1943,71 @@ def _sugestie_budzetowe(
             "impact": _waga_pieniezna(r, "budget_capped", dni, ref or 30.0),
         })
 
+    return out
+
+
+def _tylko_aktywne(session: Session, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Bez zmian dla obiektow, ktore juz nie sa aktywne.
+
+    Raport obejmuje cale okno, wiec keyword wstrzymany tydzien temu nadal ma
+    w nim koszt - i panel proponowal jego wstrzymanie. Po zakolejkowaniu
+    powstawal pusty plan, a stawka czy wykluczenie we wstrzymanej kampanii
+    nic nie zmienia, tylko zaslania reszte listy (27.11.2026: 13 takich
+    pozycji na koncie Murando).
+
+    Sugestie informacyjne (bez akcji) zostaja. Przejecie frazy tez - fraza
+    z wstrzymanej kampanii trafia do INNEJ, aktywnej grupy, wiec ma sens.
+    Brak obiektu w bazie (np. nowy, przed synchronizacja) to nie powod do
+    ukrywania - odsiewamy tylko to, o czym wiemy, ze nie jest ENABLED.
+    """
+    kampanie, grupy, obiekty, reklamy = set(), set(), set(), set()
+    for r in rows:
+        a = r.get("action") or {}
+        if not a or a.get("type") == "HARVEST":
+            continue
+        if a.get("campaign_id"):
+            kampanie.add(str(a["campaign_id"]))
+        if a.get("ad_group_id"):
+            grupy.add(str(a["ad_group_id"]))
+        if a.get("type") in ("PAUSE_TARGET", "SET_BID") and a.get("target_id"):
+            obiekty.add(str(a["target_id"]))
+        if a.get("type") == "PAUSE_PRODUCT" and a.get("ad_id"):
+            reklamy.add(str(a["ad_id"]))
+
+    def nieaktywne(model, kolumna, ids):
+        if not ids:
+            return set()
+        wynik: set[str] = set()
+        lista = list(ids)
+        for i in range(0, len(lista), 5000):
+            wynik |= {
+                str(x) for x, st in session.execute(
+                    select(kolumna, model.state).where(kolumna.in_(lista[i:i + 5000]))
+                ).all()
+                if st and st != "ENABLED"
+            }
+        return wynik
+
+    stop_k = nieaktywne(Campaign, Campaign.campaign_id, kampanie)
+    stop_g = nieaktywne(AdGroup, AdGroup.ad_group_id, grupy)
+    stop_o = (nieaktywne(Keyword, Keyword.keyword_id, obiekty)
+              | nieaktywne(Target, Target.target_id, obiekty))
+    stop_r = nieaktywne(ProductAd, ProductAd.ad_id, reklamy)
+    if not (stop_k or stop_g or stop_o or stop_r):
+        return rows
+
+    out = []
+    for r in rows:
+        a = r.get("action") or {}
+        if a and a.get("type") != "HARVEST" and (
+            str(a.get("campaign_id") or "") in stop_k
+            or str(a.get("ad_group_id") or "") in stop_g
+            or (a.get("type") in ("PAUSE_TARGET", "SET_BID")
+                and str(a.get("target_id") or "") in stop_o)
+            or (a.get("type") == "PAUSE_PRODUCT" and str(a.get("ad_id") or "") in stop_r)
+        ):
+            continue
+        out.append(r)
     return out
 
 

@@ -125,6 +125,20 @@ def _create_plan(
 ) -> dict[str, Any]:
     """Zapisuje policzony plan i zwraca go razem z identyfikatorem do zatwierdzenia."""
     now = utcnow()
+    # Plan bez ani jednej zmiany nie ma czego zatwierdzac, a w kolejce wisial
+    # jako "0 pozycji". Tak konczylo sie np. wstrzymanie produktu, ktory juz
+    # byl wstrzymany. Oddajemy sam opis - bez zapisu (pasek pokazuje wtedy
+    # "Nie ma czego zatwierdzac", kolejka sugestii nie liczy tego jako planu).
+    if not planned:
+        return {
+            "requires_confirmation": False,
+            "plan_id": None,
+            "kind": kind,
+            "summary": "Nie ma czego zmienić - wszystko jest już ustawione tak, jak w planie",
+            "planned": [],
+            "item_count": 0,
+            "skipped": [{"keyword": summary, "reason": "Już ustawione - nic do zmiany"}],
+        }
     # Klucze sugestii dla kazdego planu, nie tylko dla tych z listy sugestii.
     # Zmiana zrobiona z tabeli (zaznacz -> wstrzymaj / nowa stawka) tez ma
     # uciszyc odpowiadajaca jej sugestie: trwala na zawsze, strojaca na
@@ -818,6 +832,26 @@ def plan_remove_negatives(
     kw = [str(i) for i in keyword_ids]
     tg = [str(i) for i in target_ids]
 
+    # Archiwizacja idzie na /sp/negativeTargets. Wykluczenia z kampanii SD
+    # (synchronizacja SD tez je zapisuje) Amazon by tam odrzucil - mowimy
+    # o tym od razu zamiast przy zatwierdzeniu.
+    pominiete: list[dict[str, Any]] = []
+    if tg:
+        typ_kampanii = dict(
+            session.execute(
+                select(NegativeTarget.target_id, Campaign.ad_product)
+                .join(Campaign, Campaign.campaign_id == NegativeTarget.campaign_id, isouter=True)
+                .where(NegativeTarget.target_id.in_(tg))
+            ).all()
+        )
+        for i in [i for i in tg if (typ_kampanii.get(i) or "SP") != "SP"]:
+            pominiete.append({
+                "keyword": i,
+                "reason": (f"Wykluczenie z kampanii {typ_kampanii.get(i)} usuń w konsoli "
+                           "Amazona - panel usuwa tylko wykluczenia Sponsored Products."),
+            })
+        tg = [i for i in tg if (typ_kampanii.get(i) or "SP") == "SP"]
+
     teksty = dict(
         session.execute(
             select(NegativeKeyword.keyword_id, NegativeKeyword.keyword_text)
@@ -852,11 +886,14 @@ def plan_remove_negatives(
             "co": "TARGET",
         })
 
-    return _create_plan(
+    wynik = _create_plan(
         session, profile_id, "remove_negatives",
         f"Usunięcie {len(planned)} wykluczeń (nieodwracalne)",
         {}, planned, source, rule_id,
     )
+    if pominiete:
+        wynik = {**wynik, "skipped": [*(wynik.get("skipped") or []), *pominiete]}
+    return wynik
 
 
 # Typy wyrazen, ktore celuja w PRODUKT, a nie w slowo. Lista jest po
@@ -1068,6 +1105,62 @@ def _wybierz_grupe_docelowa(
         "wspolne_sku": najlepszy[2],
         "pokrycie_celu": round(najlepszy[0] * 100),
     }
+
+
+def przejecia_niewykonalne(
+    session: Session, profile_id: int, akcje: list[dict[str, Any]],
+) -> dict[int, str]:
+    """Indeks akcji HARVEST -> powod, dla ktorego `plan_harvest` ja odrzuci.
+
+    Te same warunki co w `plan_harvest`, liczone juz przy pokazywaniu listy.
+    27.11.2026 polowa sprawdzonych sugestii "przejmij jako keyword" konczyla
+    sie po kliknieciu komunikatem "nic nie trafilo do kolejki" - bo nie bylo
+    grupy keywordowej z tymi produktami. Sugestia, ktorej nie da sie wykonac,
+    nie moze wygladac na wykonalna.
+    """
+    if not akcje:
+        return {}
+    kandydaci = _grupy_przyjmujace_keywordy(session, profile_id)
+    zrodla = {str(a.get("ad_group_id")) for a in akcje if a.get("ad_group_id")}
+    skus: dict[str, set[str]] = {}
+    for gid, sku in session.execute(
+        select(ProductAd.ad_group_id, ProductAd.sku)
+        .where(ProductAd.ad_group_id.in_(list(zrodla)))
+    ).all():
+        if sku:
+            skus.setdefault(str(gid), set()).add(sku)
+    portfele = dict(session.execute(
+        select(Campaign.campaign_id, Campaign.portfolio_id)
+        .where(Campaign.profile_id == profile_id)
+    ).all())
+    teksty = sorted({(a.get("keyword_text") or "").strip().lower() for a in akcje})
+    istniejace = {
+        (str(gid), (t or "").strip().lower(), (mt or "").upper())
+        for gid, t, mt in session.execute(
+            select(Keyword.ad_group_id, Keyword.keyword_text, Keyword.match_type).where(
+                Keyword.profile_id == profile_id, Keyword.state != "ARCHIVED",
+                func.lower(Keyword.keyword_text).in_(teksty),
+            )
+        ).all()
+    }
+    out: dict[int, str] = {}
+    for i, a in enumerate(akcje):
+        tekst = (a.get("keyword_text") or "").strip()
+        powod = _dlaczego_zla_fraza(tekst) if tekst else "Brak frazy."
+        if powod:
+            out[i] = powod
+            continue
+        cel = _wybierz_grupe_docelowa(
+            kandydaci, skus.get(str(a.get("ad_group_id")), set()),
+            portfele.get(str(a.get("campaign_id"))),
+        )
+        if cel is None:
+            out[i] = ("brak grupy keywordowej reklamującej te same produkty - "
+                      "załóż kampanię ścisłą na ten asortyment")
+            continue
+        if (cel["ad_group_id"], tekst.lower(), (a.get("match_type") or "EXACT").upper()) in istniejace:
+            out[i] = f"ten keyword już istnieje w grupie {cel['ad_group_name']} ({cel['campaign_name']})"
+    return out
 
 
 def plan_harvest(
@@ -1962,10 +2055,28 @@ def plan_default_bids(
         ).all()
     )
 
+    # Wysylka idzie na /sp/adGroups - grupa SB albo SD wyslana tam konczy sie
+    # odmowa Amazona dopiero przy zatwierdzeniu. Ekran kampanii pozwala
+    # edytowac stawke domyslna kazdej grupy, wiec odsiewamy je tutaj.
+    produkt = dict(
+        session.execute(
+            select(AdGroup.ad_group_id, AdGroup.ad_product).where(AdGroup.ad_group_id.in_(ids))
+        ).all()
+    )
+
     planned: list[dict[str, Any]] = []
     pominiete: list[dict[str, Any]] = []
     for poz in pozycje:
         gid = str(poz["ad_group_id"])
+        if (produkt.get(gid) or "SP") != "SP":
+            pominiete.append({
+                "keyword": nazwy.get(gid) or gid,
+                "reason": (
+                    f"Stawkę domyślną grup {produkt.get(gid)} zmienia się w konsoli "
+                    "Amazona - panel ustawia ją tylko w Sponsored Products."
+                ),
+            })
+            continue
         lo, hi = zakres_stawki("SP")
         try:
             nowa = round(float(poz.get("bid")), 2)
@@ -2241,6 +2352,26 @@ def _execute_bids(session, profile_id, payload, planned, source, rule_id):
                 wynik, klucz = sb_entities.set_keyword_bids(client, rekordy), "keywordId"
             elif prod == "SD" and kind == "TARGET":
                 wynik, klucz = sd_entities.set_target_bids(client, pary), "targetId"
+            elif prod == "SB" and kind == "TARGET":
+                # Plan pozwalal ustawic stawke targetu SB, a wysylka konczyla sie
+                # "nie jest jeszcze obslugiwana" - dopiero przy zatwierdzeniu.
+                gdzie = dict(
+                    (str(t), (c, g)) for t, c, g in session.execute(
+                        select(Target.target_id, Target.campaign_id, Target.ad_group_id)
+                        .where(Target.target_id.in_([str(t) for t, _ in pary]))
+                    ).all()
+                )
+                rekordy = [
+                    {"targetId": tid, "bid": bid,
+                     "campaignId": gdzie[str(tid)][0], "adGroupId": gdzie[str(tid)][1]}
+                    for tid, bid in pary if str(tid) in gdzie
+                ]
+                for tid, _ in pary:
+                    if str(tid) not in gdzie:
+                        errors[str(tid)] = "Brak targetu w bazie - odswiez dane i sprobuj ponownie"
+                if not rekordy:
+                    continue
+                wynik, klucz = sb_entities.set_target_bids(client, rekordy), "targetId"
             else:
                 # Nie zgadujemy endpointu - lepiej powiedziec wprost, ze tego
                 # polaczenia jeszcze nie obslugujemy, niz wyslac w zle miejsce.
@@ -2425,10 +2556,16 @@ def _sparuj_z_odpowiedzia(
     pary: list[tuple[dict[str, Any], str]] = []
     bez_indeksu: list[str] = []
 
+    # SP v3 przy TWORZENIU wykluczen podaje identyfikator pod wlasna nazwa
+    # zasobu (`negativeKeywordId`, `campaignNegativeKeywordId`), a nie
+    # `keywordId` jak przy odczycie - bez tego nowe wykluczenie nie trafialo
+    # do lokalnej bazy az do synchronizacji.
+    zamienniki = (id_field, "negative" + id_field[:1].upper() + id_field[1:],
+                  "campaignNegative" + id_field[:1].upper() + id_field[1:])
     for wpis in sukcesy:
         if not isinstance(wpis, dict):
             continue
-        nowy = wpis.get(id_field)
+        nowy = next((wpis.get(k) for k in zamienniki if wpis.get(k)), None)
         idx = wpis.get("index")
         if isinstance(idx, int) and 0 <= idx < len(items) and nowy:
             pary.append((items[idx], str(nowy)))
@@ -2679,19 +2816,76 @@ def _execute_off_amazon(session, profile_id, payload, planned, source, rule_id):
     return _finalize(session, profile_id, planned, ok_ids, errors, source, rule_id, local)
 
 
+def _zestaw_placementow_teraz(
+    session: Session, payload: dict[str, Any], planned: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Pelny zestaw placementBidding kazdej kampanii - skladany W CHWILI WYSYLKI.
+
+    Amazon zastepuje caly zestaw naraz, wiec to, czego w zadaniu nie ma,
+    znika. Zestaw zapisany przy liczeniu planu byl do tego zlym zrodlem
+    (27.11.2026, sprawdzenie na koncie Murando):
+
+    * brakowalo w nim SITE_AMAZON_BUSINESS - kolejka z Sugestii skladala tylko
+      trzy placementy, a 155 kampanii ma ustawiony modyfikator Amazon Business;
+      kazda zmiana kasowala go po cichu,
+    * placement bez ruchu w oknie raportu dostawal 0% - 10 kampanii z ustawiona
+      gora wynikow stracilo by ja przy zmianie innego placementu,
+    * przy zatwierdzeniu czesci pozycji niezatwierdzone i tak szly z NOWA
+      wartoscia,
+    * plan czeka w kolejce bez terminu, a w tym czasie ktos moze zmienic
+      modyfikator w konsoli Amazona.
+
+    Dlatego baza to obecne ustawienia kampanii (z ostatniej synchronizacji),
+    a zmienia sie wylacznie to, co zatwierdzono. Strategia licytacji tez
+    obecna - plan jej nie zmienia, wiec nie moze jej nadpisac stara wartoscia.
+    """
+    zmiany: dict[str, dict[str, float]] = {}
+    for item in planned:
+        if item.get("placement") in PLACEMENTY_ZAPISYWALNE and item.get("new_value") is not None:
+            zmiany.setdefault(str(item["id"]), {})[item["placement"]] = float(item["new_value"])
+
+    z_planu = {str(it.get("campaignId")): it for it in payload.get("items", [])}
+    if not zmiany:
+        # Plan sprzed zapisywania surowej nazwy placementu w pozycji - tylko
+        # zestaw z planu mowi, co mialo sie zmienic.
+        for cid, it in z_planu.items():
+            zmiany[cid] = {
+                p["placement"]: float(p.get("percentage") or 0)
+                for p in it.get("placements", [])
+                if p.get("placement") in PLACEMENTY_ZAPISYWALNE
+            }
+
+    out = []
+    for cid, nowe in zmiany.items():
+        kampania = session.get(Campaign, cid)
+        obecne: dict[str, float] = {}
+        if kampania is not None and kampania.placement_bidding:
+            for p in kampania.placement_bidding:
+                if p.get("placement") in PLACEMENTY_ZAPISYWALNE:
+                    obecne[p["placement"]] = float(p.get("percentage") or 0)
+        elif cid in z_planu:
+            # Bez zapisanych ustawien kampanii zostaje to, co znal plan
+            for p in z_planu[cid].get("placements", []):
+                if p.get("placement") in PLACEMENTY_ZAPISYWALNE:
+                    obecne[p["placement"]] = float(p.get("percentage") or 0)
+        zestaw = {**obecne, **nowe}
+        strategia = (
+            (kampania.bidding_strategy if kampania is not None else None)
+            or (z_planu.get(cid) or {}).get("strategy")
+            or "LEGACY_FOR_SALES"
+        )
+        out.append({
+            "campaignId": cid,
+            "strategy": strategia,
+            "placements": [
+                {"placement": k, "percentage": v} for k, v in sorted(zestaw.items())
+            ],
+        })
+    return [it for it in out if it["placements"]]
+
+
 def _execute_placements(session, profile_id, payload, planned, source, rule_id):
-    # Filtr jest TAKZE tutaj, nie tylko przy liczeniu planu. Plany nie wygasaja,
-    # wiec w kolejce moze czekac taki policzony przed poprawka - z wierszem
-    # "Off Amazon", ktory Amazon odrzuca bledem 400 i wywraca cale zadanie.
-    # Bez tego trzeba by je kasowac recznie i liczyc od nowa.
-    items = [
-        {**it, "placements": [
-            p for p in it.get("placements", [])
-            if p.get("placement") in PLACEMENTY_ZAPISYWALNE
-        ]}
-        for it in payload.get("items", [])
-    ]
-    items = [it for it in items if it["placements"]]
+    items = _zestaw_placementow_teraz(session, payload, planned)
     with AdsClient(profile_id=profile_id) as client:
         ok_ids, errors = _split_results(
             entities.set_placement_modifiers(client, items), "campaignId"
@@ -2784,7 +2978,10 @@ def _execute_remove_negatives(session, profile_id, payload, planned, source, rul
     tg = [p["id"] for p in planned if p.get("co") == "TARGET"]
 
     ok_ids: set[str] = set()
-    errors: list[Any] = []
+    # Slownik id -> opis, jak w `_finalize`. Byla tu lista i zatwierdzenie
+    # wywracalo sie PO wyslaniu do Amazona: wykluczenie znikalo, a plan
+    # zostawal w kolejce bez wpisu w historii.
+    errors: dict[str, str] = {}
 
     with AdsClient(profile_id=profile_id) as client:
         for ids, poziom in ((kw_grupa, "AD_GROUP"), (kw_kampania, "CAMPAIGN")):
@@ -2795,13 +2992,13 @@ def _execute_remove_negatives(session, profile_id, payload, planned, source, rul
                 "keywordId",
             )
             ok_ids |= set(udane)
-            errors.extend(bledy)
+            errors.update(bledy)
         if tg:
             udane, bledy = _split_results(
                 entities.set_negative_target_state(client, tg, "ARCHIVED"), "targetId"
             )
             ok_ids |= set(udane)
-            errors.extend(bledy)
+            errors.update(bledy)
 
     def local(p):
         model = NegativeKeyword if p.get("co") == "KEYWORD" else NegativeTarget

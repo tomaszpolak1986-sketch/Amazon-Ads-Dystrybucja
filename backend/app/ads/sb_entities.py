@@ -133,6 +133,24 @@ def set_keyword_bids(client: AdsClient, records: list[dict[str, Any]]):
     return na_ksztalt_v3(client.request("PUT", "/sb/keywords", json=body), "keywordId")
 
 
+def set_target_bids(client: AdsClient, records: list[dict[str, Any]]):
+    """Zmiana stawek targetow SB - ten sam stary zasob co wstrzymanie.
+
+    records: [{targetId, campaignId, adGroupId, bid}] - jak przy keywordach
+    stary interfejs SB chce w rekordzie calej trojki identyfikatorow.
+    """
+    body = [
+        {
+            "targetId": int(r["targetId"]),
+            "campaignId": int(r["campaignId"]),
+            "adGroupId": int(r["adGroupId"]),
+            "bid": round(float(r["bid"]), 2),
+        }
+        for r in records
+    ]
+    return na_ksztalt_v3(client.request("PUT", "/sb/targets", json=body), "targetId")
+
+
 def _v4_write(client: AdsClient, sciezka: str, media: str, klucz: str, records: list[dict]):
     """PUT na zasob SB v4. Odpowiedz ma ksztalt SP v3, ale zagniezdzony pod
     nazwa zasobu: {"campaigns": {"success": [...], "error": [...]}}."""

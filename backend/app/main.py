@@ -1466,17 +1466,27 @@ def post_queue_suggestions(
         changes = []
         for cid, wanted in by_campaign.items():
             slots = []
+            campaign = session.get(Campaign, cid)
+            # Obecna wartosc z ustawien kampanii, nie z raportu: placement bez
+            # ruchu w oknie nie ma wiersza w raporcie i dostawal 0%.
+            ustawione = {
+                p.get("placement"): float(p.get("percentage") or 0)
+                for p in ((campaign.placement_bidding if campaign else None) or [])
+            }
             for placement in (
-                "PLACEMENT_TOP", "PLACEMENT_REST_OF_SEARCH", "PLACEMENT_PRODUCT_PAGE"
+                "PLACEMENT_TOP", "PLACEMENT_REST_OF_SEARCH", "PLACEMENT_PRODUCT_PAGE",
+                "SITE_AMAZON_BUSINESS",
             ):
                 row = current.get((cid, placement))
-                old = float((row or {}).get("modifier") or 0)
+                if placement in ustawione:
+                    old = ustawione[placement]
+                else:
+                    old = float((row or {}).get("modifier") or 0)
                 slots.append({
                     "placement": placement,
                     "old": old,
                     "new": float(wanted.get(placement, old)),
                 })
-            campaign = session.get(Campaign, cid)
             changes.append({
                 "campaign_id": cid,
                 "strategy": campaign.bidding_strategy if campaign else None,
